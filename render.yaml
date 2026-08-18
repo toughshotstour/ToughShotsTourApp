@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: tough-shots-scoring
+    runtime: python
+    plan: starter
+    region: virginia
+    rootDir: cloud
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: TOUGHSHOTS_ADMIN_KEY
+        sync: false
+      - key: TOUGHSHOTS_CLOUD_DB
+        value: /var/data/toughshots_cloud.sqlite3
+    disk:
+      name: tough-shots-data
+      mountPath: /var/data
+      sizeGB: 1
