@@ -950,24 +950,56 @@ def boy_division(division_slug: str):
 def _jg_slug(name: str) -> str:
     return name.casefold().replace(" ","-")
 
+
+def _jg_group_for_division(division: str, available_groups):
+    """Resolve one of the seven public division buttons to its active JG group.
+
+    Jr. Gold can merge Boys/Girls within an age group.  The public landing page
+    deliberately remains a fixed seven-button layout; when an age group is
+    merged, both its Boys and Girls buttons open the same Combined standings.
+    """
+    names = {g["group_name"]: g for g in available_groups}
+    if division in names:
+        return names[division]
+    if division == "U12 Mixed":
+        return names.get("U12 Mixed")
+    parts = division.split(" ", 1)
+    if len(parts) == 2 and parts[0] in {"U14", "U16", "U18"}:
+        return names.get(f"{parts[0]} Combined")
+    return None
+
+
 @app.get("/jr-gold", response_class=HTMLResponse)
 def jr_gold_index():
     with db() as conn:
         t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
         groups=[] if not t else conn.execute("SELECT * FROM public_jr_gold_groups WHERE tournament_id=? ORDER BY group_name",(t["tournament_id"],)).fetchall()
-    tiles="".join(f"<a class='tile' href='/jr-gold/{_jg_slug(g['group_name'])}'><h2>{html.escape(g['group_name'])}</h2></a>" for g in groups)
-    if not t:
-        return _page("Jr. Gold Qualifying", "<p><a href='/'>← Home</a></p><h2>Jr. Gold Qualifying</h2><p>No Jr. Gold standings have been published yet.</p>")
-    return _page("Jr. Gold Qualifying",f"<p><a href='/'>← Home</a></p><h2>Jr. Gold Qualifying</h2><p><strong>{html.escape(t['name'])}</strong><br>{html.escape(t['event_date'])}</p><div class='grid'>{tiles}</div>")
 
-@app.get("/jr-gold/{group_slug}", response_class=HTMLResponse)
-def jr_gold_group(group_slug: str):
+    # Match the regular Qualifying and Bowler of the Year pages exactly: seven
+    # permanent division buttons.  Merge settings affect the destination data,
+    # not the shape of this navigation page.
+    tiles="".join(
+        f"<a class='tile' href='/jr-gold/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>"
+        for d in DIVISIONS
+    )
+    status = "" if t else "<p>No Jr. Gold standings have been published yet.</p>"
+    event = "" if not t else f"<p><strong>{html.escape(t['name'])}</strong><br>{html.escape(t['event_date'])}</p>"
+    return _page("Jr. Gold Qualifying",f"<p><a href='/'>← Home</a></p><h2>Jr. Gold Qualifying</h2>{event}{status}<div class='grid'>{tiles}</div>")
+
+
+@app.get("/jr-gold/{division_slug}", response_class=HTMLResponse)
+def jr_gold_group(division_slug: str):
+    division = _division_from_slug(division_slug)
+    if not division:
+        raise HTTPException(status_code=404,detail="Jr. Gold division not found")
     with db() as conn:
         t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
-        if not t: raise HTTPException(status_code=404,detail="No Jr. Gold standings published")
+        if not t:
+            return _page(division, f"<p><a href='/jr-gold'>← Jr. Gold Divisions</a></p><h2>{html.escape(division)} — Jr. Gold Qualifying</h2><p>No Jr. Gold standings have been published yet.</p>")
         groups=conn.execute("SELECT * FROM public_jr_gold_groups WHERE tournament_id=?",(t["tournament_id"],)).fetchall()
-        g=next((x for x in groups if _jg_slug(x["group_name"])==group_slug),None)
-        if not g: raise HTTPException(status_code=404,detail="Jr. Gold group not found")
+        g=_jg_group_for_division(division, groups)
+        if not g:
+            return _page(division, f"<p><a href='/jr-gold'>← Jr. Gold Divisions</a></p><h2>{html.escape(division)} — Jr. Gold Qualifying</h2><p>No Jr. Gold standings are available for this division.</p>")
         rows=conn.execute("SELECT * FROM public_jr_gold WHERE tournament_id=? AND group_name=? ORDER BY rank",(t["tournament_id"],g["group_name"])).fetchall()
     import json as _json
     trs=[]; cut=int(g["cut_size"] or 0)

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Tournament runtime data
+TournamentWorkspace/
+imported_files/
+
+# Local/cloud databases
+*.db
+*.sqlite
+*.sqlite3
+cloud/data/
+
+# Generated tournament artifacts
+lane_assignments.csv
+lane_scoresheets.pdf
+lane_manifest.json
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
