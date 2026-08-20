@@ -71,9 +71,11 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
             f"There are {len(bowlers)} bowlers, so the number of lanes cannot exceed {len(bowlers)}."
         )
 
-    # Lane assignments are division-contained: a lane pair never mixes divisions.
-    # First allocate available lane pairs among divisions (at least one pair per
-    # active division), then balance each division across its own pairs.
+    # Balance the *lane pairs* first, across the whole field. Pair totals may
+    # differ by at most one bowler. Divisions are then packed into those pair
+    # capacities as intact blocks whenever possible. If perfectly even pair
+    # sizes require a mixed pair, divisions may mix, but each division's
+    # bowlers stay next to one another on the scorecard.
     division_order = ["U12 Mixed", "U14 Boys", "U14 Girls", "U16 Boys", "U16 Girls", "U18 Boys", "U18 Girls"]
     grouped = {}
     for bowler in bowlers:
@@ -82,42 +84,91 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
 
     pair_lane_numbers = [list(range(start, min(start + 2, lane_count + 1))) for start in range(1, lane_count + 1, 2)]
     pair_count = len(pair_lane_numbers)
-    if pair_count < len(active_divisions):
-        raise ValueError(
-            f"Division-based lane assignment needs at least one lane pair per active division. "
-            f"This roster has {len(active_divisions)} active divisions but {lane_count} lanes provide only {pair_count} lane pairs."
-        )
+    base_size, extra_pairs = divmod(len(bowlers), pair_count)
+    pair_capacities = [base_size + (1 if i < extra_pairs else 0) for i in range(pair_count)]
 
-    # Allocate one pair to each division, then give extra pairs to the division
-    # with the greatest current bowlers-per-pair load. This keeps each division
-    # as evenly spread as the available lane pairs allow.
-    pairs_per_division = {d: 1 for d in active_divisions}
-    for _ in range(pair_count - len(active_divisions)):
-        d = max(active_divisions, key=lambda x: (len(grouped[x]) / pairs_per_division[x], len(grouped[x])))
-        pairs_per_division[d] += 1
+    # Pick a division order that minimizes mixed scorecards for the fixed,
+    # globally-even capacities. There are normally only seven divisions, so a
+    # complete permutation search is small and gives much better results than
+    # a greedy pass (for example, it can discover 5 | 3+2 rather than splitting
+    # a five-bowler division across both cards).
+    import itertools
+
+    division_counts = {d: len(grouped[d]) for d in active_divisions}
+
+    def simulate_order(order):
+        remaining = {d: division_counts[d] for d in order}
+        pair_groups = []
+        div_idx = 0
+        for capacity in pair_capacities:
+            left = capacity
+            groups_here = []
+            while left > 0:
+                while div_idx < len(order) and remaining[order[div_idx]] == 0:
+                    div_idx += 1
+                if div_idx >= len(order):
+                    raise RuntimeError("Internal lane assignment error: ran out of bowlers.")
+                division = order[div_idx]
+                take = min(left, remaining[division])
+                groups_here.append((division, take))
+                remaining[division] -= take
+                left -= take
+                if remaining[division] == 0:
+                    div_idx += 1
+            pair_groups.append(groups_here)
+
+        mixed_pairs = sum(1 for groups in pair_groups if len(groups) > 1)
+        # A secondary measure favors fewer total division fragments across all
+        # scorecards. The final tie-breaker keeps the familiar division order
+        # as much as possible.
+        fragments = sum(len(groups) for groups in pair_groups)
+        order_penalty = sum(abs(active_divisions.index(d) - i) for i, d in enumerate(order))
+        return (mixed_pairs, fragments, order_penalty), pair_groups
+
+    best_score = None
+    best_groups = None
+    # 7! = 5040, which is trivial at tournament-prep time. If a custom roster
+    # somehow has many more division labels, use a size-first heuristic rather
+    # than exploding the permutation search.
+    if len(active_divisions) <= 8:
+        orders = itertools.permutations(active_divisions)
+    else:
+        orders = [tuple(sorted(active_divisions, key=lambda d: (-division_counts[d], d)))]
+    for order in orders:
+        score, groups = simulate_order(order)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_groups = groups
+
+    rng = random.SystemRandom()
+    division_queues = {}
+    for division in active_divisions:
+        rows = list(grouped[division])
+        rng.shuffle(rows)
+        division_queues[division] = rows
 
     lanes = {lane: [] for lane in range(1, lane_count + 1)}
     pair_divisions = {}
-    pair_cursor = 0
-    rng = random.SystemRandom()
-    for division in active_divisions:
-        assigned_pair_indexes = list(range(pair_cursor, pair_cursor + pairs_per_division[division]))
-        pair_cursor += pairs_per_division[division]
-        div_bowlers = list(grouped[division])
-        rng.shuffle(div_bowlers)
-        buckets = [[] for _ in assigned_pair_indexes]
-        for idx, bowler in enumerate(div_bowlers):
-            buckets[idx % len(buckets)].append(bowler)
+    for pair_index, (lane_numbers, groups_here) in enumerate(zip(pair_lane_numbers, best_groups)):
+        pair_rows = []
+        names = []
+        for division, count in groups_here:
+            names.append(division)
+            chunk = division_queues[division][:count]
+            del division_queues[division][:count]
+            # Keep this division as one contiguous block within the pair.
+            pair_rows.extend(chunk)
+        pair_divisions[pair_index] = " / ".join(names)
 
-        for local_idx, pair_index in enumerate(assigned_pair_indexes):
-            lane_numbers = pair_lane_numbers[pair_index]
-            pair_divisions[pair_index] = division
-            rows = buckets[local_idx]
-            rng.shuffle(rows)
-            # Odd/first lane receives the extra bowler when a pair total is odd.
-            for idx, bowler in enumerate(rows):
-                lane = lane_numbers[idx % len(lane_numbers)]
-                lanes[lane].append(bowler)
+        if len(lane_numbers) == 1:
+            lanes[lane_numbers[0]].extend(pair_rows)
+        else:
+            # The first/odd lane receives half rounded up; the second/even lane
+            # receives half rounded down. Keeping pair_rows in sequence also
+            # keeps mixed-division groups adjacent across the lane break.
+            odd_count = (len(pair_rows) + 1) // 2
+            lanes[lane_numbers[0]].extend(pair_rows[:odd_count])
+            lanes[lane_numbers[1]].extend(pair_rows[odd_count:])
 
     tournament_id = tournament_id or secrets.token_urlsafe(12)
     lane_rows = [
@@ -143,7 +194,7 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "qualifying_games": 6,
         "lane_count": lane_count,
-        "assignment_method": "division_balanced_lane_pairs",
+        "assignment_method": "globally_balanced_pairs_division_clustered",
         "lanes": lane_rows,
         "lane_pairs": lane_pairs,
     }
