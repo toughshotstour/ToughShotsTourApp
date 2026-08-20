@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
-from lane_scoring import _json_request, normalize_base_url
+from lane_scoring import _json_request, normalize_base_url, proper_name
 
 DIVISIONS = ["U12 Mixed","U14 Boys","U14 Girls","U16 Boys","U16 Girls","U18 Boys","U18 Girls"]
 
@@ -42,7 +42,7 @@ def demographic_rows(path):
         for row_no,row in enumerate(reader,start=2):
             if not any((v or "").strip() for v in row.values()):
                 continue
-            result.append({"first_name":(row.get(first) or "").strip(),"last_name":(row.get(last) or "").strip(),"birthdate":(row.get(birth) or "").strip(),"gender":(row.get(gender) or "").strip(),"usbc_id":(row.get(usbc) or "").strip(),"source_row":row_no})
+            result.append({"first_name":proper_name(row.get(first)),"last_name":proper_name(row.get(last)),"birthdate":(row.get(birth) or "").strip(),"gender":(row.get(gender) or "").strip(),"usbc_id":(row.get(usbc) or "").strip(),"source_row":row_no})
     return result
 
 
@@ -85,7 +85,9 @@ def qualifying_payload(roster_path, manifest_path, tournament_name, event_date=N
                 continue
             out=[]
             for r in tdb.qualifying_rows(division):
-                out.append({k:r[k] for k in ("first_name","last_name","birthdate","rank","scores","complete","total","average")})
+                item={k:r[k] for k in ("first_name","last_name","birthdate","rank","scores","complete","total","average")}
+                item["first_name"]=proper_name(item["first_name"]); item["last_name"]=proper_name(item["last_name"])
+                out.append(item)
             divisions[division]=out
     finally:
         tdb.close()
@@ -100,7 +102,7 @@ def publish_qualifying(base_url, admin_key, roster_path, manifest_path, tourname
 def _performance_for_division(tdb, division):
     qrows=tdb.qualifying_rows(division)
     bracket=tdb.load_bracket(division)
-    perf={r["bowler_id"]:{"first_name":r["first_name"],"last_name":r["last_name"],"birthdate":r["birthdate"],"division":division,"qualifying_rank":r["rank"],"scores":r["scores"],"qualifying_total":r["total"],"qualifying_average":r["average"],"high_game":max([x for x in r["scores"] if x is not None],default=None),"match_wins":0,"match_losses":0,"finish_label":"Did not enter match play","boy_points":0} for r in qrows}
+    perf={r["bowler_id"]:{"first_name":proper_name(r["first_name"]),"last_name":proper_name(r["last_name"]),"birthdate":r["birthdate"],"division":division,"qualifying_rank":r["rank"],"scores":r["scores"],"qualifying_total":r["total"],"qualifying_average":r["average"],"high_game":max([x for x in r["scores"] if x is not None],default=None),"match_wins":0,"match_losses":0,"finish_label":"Did not enter match play","boy_points":0} for r in qrows}
     rounds=(bracket or {}).get("rounds") or []
     # Track every played match. A loss identifies the elimination round; final winner is champion.
     for ridx, matches in enumerate(rounds):
@@ -193,6 +195,7 @@ def jr_gold_payload(base_url, admin_key, roster_path, manifest_path, tournament_
                     if settings["merges"].get(age) and division in {f"{age} Boys",f"{age} Girls"}:
                         group=f"{age} Combined"
                 item={k:r[k] for k in ("first_name","last_name","birthdate","scores","complete","total","average")}
+                item["first_name"]=proper_name(item["first_name"]); item["last_name"]=proper_name(item["last_name"])
                 item["jr_gold_state"]=pb.get("jr_gold_state") or ""
                 item["bowler_id"]=pb.get("bowler_id")
                 item["source_division"]=division

@@ -32,6 +32,16 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def proper_name(value):
+    """Normalize common CSV casing while preserving intentional mixed-case names."""
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return ""
+    if text.isupper() or text.islower():
+        return text.title()
+    return text
+
+
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
@@ -293,7 +303,7 @@ async def publish(request: Request, x_admin_key: str | None = Header(default=Non
                 seen.add(bid)
                 conn.execute(
                     "INSERT INTO bowlers(tournament_id,bowler_id,first_name,last_name,division) VALUES(?,?,?,?,?)",
-                    (tournament_id, bid, bowler["first_name"], bowler["last_name"], bowler.get("division", "")),
+                    (tournament_id, bid, proper_name(bowler["first_name"]), proper_name(bowler["last_name"]), bowler.get("division", "")),
                 )
                 conn.execute(
                     "INSERT INTO assignments(tournament_id,lane_no,position,bowler_id) VALUES(?,?,?,?)",
@@ -396,8 +406,8 @@ def render_pair(token, scorer, *, notice="", warn=False, status=200):
                 if value is not None: total += value
                 val="" if value is None else str(value)
                 field=f"score__{b['bowler_id']}__{game}"
-                fields.append(f'<div class="game"><label>Game {game}</label><input aria-label="{html.escape(b["first_name"])} game {game}" type="number" inputmode="numeric" min="0" max="300" name="{field}" value="{val}"></div>')
-            cards.append(f'<section class="bowler"><div class="bowler-head"><div class="name">{html.escape(b["first_name"]+" "+b["last_name"])}</div><div class="total">Total: <span>{total if complete else "-"}</span></div></div><div class="scoregrid">{"".join(fields)}</div></section>')
+                fields.append(f'<div class="game"><label>Game {game}</label><input aria-label="{html.escape(proper_name(b["first_name"]))} game {game}" type="number" inputmode="numeric" min="0" max="300" name="{field}" value="{val}"></div>')
+            cards.append(f'<section class="bowler"><div class="bowler-head"><div class="name">{html.escape(proper_name(b["first_name"])+" "+proper_name(b["last_name"]))}</div><div class="total">Total: <span>{total if complete else "-"}</span></div></div><div class="scoregrid">{"".join(fields)}</div></section>')
         sections.append(f'<div class="lane-title">Lane {lane_no}</div>{"".join(cards)}')
     label=f"Lane {lane_nos[0]}" if len(lane_nos)==1 else f"Lanes {lane_nos[0]}-{lane_nos[1]}"
     notice_html=f'<div class="notice {"warn" if warn else ""}">{html.escape(notice)}</div>' if notice else ""
@@ -704,8 +714,8 @@ async def api_import_bowlers(request: Request, x_admin_key: str | None = Header(
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         for index, item in enumerate(rows, start=2):
-            first = str(item.get("first_name", "")).strip()
-            last = str(item.get("last_name", "")).strip()
+            first = proper_name(item.get("first_name", ""))
+            last = proper_name(item.get("last_name", ""))
             try:
                 raw_usbc = str(item.get("usbc_id", "")).strip()
                 birthdate = _normalize_birthdate(str(item.get("birthdate", "")))
@@ -771,7 +781,7 @@ async def api_publish_qualifying(request: Request, x_admin_key: str | None = Hea
                 scores = row.get("scores") or []
                 valid_scores = [int(x) for x in scores if x is not None and str(x) != ""]
                 conn.execute("INSERT INTO public_qualifying(tournament_id,division,bowler_id,first_name,last_name,rank,scores_json,total,average,high_game,complete) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                             (tournament_id, division, permanent["bowler_id"] if permanent else None, row.get("first_name", ""), row.get("last_name", ""), int(row.get("rank", 0)), __import__('json').dumps(scores), int(row.get("total", 0)), row.get("average"), max(valid_scores) if valid_scores else None, 1 if row.get("complete") else 0))
+                             (tournament_id, division, permanent["bowler_id"] if permanent else None, proper_name(row.get("first_name", "")), proper_name(row.get("last_name", "")), int(row.get("rank", 0)), __import__('json').dumps(scores), int(row.get("total", 0)), row.get("average"), max(valid_scores) if valid_scores else None, 1 if row.get("complete") else 0))
         conn.commit()
     return {"ok": True, "tournament_id": tournament_id, "unmatched_bowlers": unmatched}
 
@@ -804,7 +814,7 @@ async def api_archive_tournament(request: Request, x_admin_key: str | None = Hea
             finish=str(row.get("finish_label", ""))
             calc_points=(field_size-rank+1 if rank else 0) + int(row.get("match_wins",0))*5 + (20 if finish=="Champion" else (10 if finish=="Runner-up" else 0))
             conn.execute("INSERT INTO tournament_performance(tournament_id,bowler_id,first_name,last_name,division,qualifying_rank,scores_json,qualifying_total,qualifying_average,high_game,match_wins,match_losses,finish_label,boy_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                         (tournament_id, permanent["bowler_id"] if permanent else None, row.get("first_name", ""), row.get("last_name", ""), division, row.get("qualifying_rank"), __import__('json').dumps(row.get("scores") or []), int(row.get("qualifying_total", 0)), row.get("qualifying_average"), row.get("high_game"), int(row.get("match_wins", 0)), int(row.get("match_losses", 0)), finish, calc_points))
+                         (tournament_id, permanent["bowler_id"] if permanent else None, proper_name(row.get("first_name", "")), proper_name(row.get("last_name", "")), division, row.get("qualifying_rank"), __import__('json').dumps(row.get("scores") or []), int(row.get("qualifying_total", 0)), row.get("qualifying_average"), row.get("high_game"), int(row.get("match_wins", 0)), int(row.get("match_losses", 0)), finish, calc_points))
 
         # Jr. Gold qualification is finalized at archive time. Any bowler who was
         # marked JG, completed all six qualifying games, and finished at or above
@@ -859,7 +869,7 @@ async def api_publish_jr_gold(request: Request, x_admin_key: str | None = Header
             cut=max(0,int((spec or {}).get("cut_size",0) or 0))
             conn.execute("INSERT INTO public_jr_gold_groups(tournament_id,group_name,cut_size) VALUES(?,?,?)",(tournament_id,str(group_name),cut))
             for row in rows:
-                conn.execute("INSERT INTO public_jr_gold(tournament_id,group_name,bowler_id,first_name,last_name,source_division,jr_gold_state,rank,scores_json,total,average,complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(tournament_id,str(group_name),row.get("bowler_id"),row.get("first_name",""),row.get("last_name",""),row.get("source_division",""),row.get("jr_gold_state",""),int(row.get("rank",0)),__import__('json').dumps(row.get("scores") or []),int(row.get("total",0)),row.get("average"),1 if row.get("complete") else 0))
+                conn.execute("INSERT INTO public_jr_gold(tournament_id,group_name,bowler_id,first_name,last_name,source_division,jr_gold_state,rank,scores_json,total,average,complete) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(tournament_id,str(group_name),row.get("bowler_id"),proper_name(row.get("first_name","")),proper_name(row.get("last_name","")),row.get("source_division",""),row.get("jr_gold_state",""),int(row.get("rank",0)),__import__('json').dumps(row.get("scores") or []),int(row.get("total",0)),row.get("average"),1 if row.get("complete") else 0))
                 count += 1
         conn.commit()
     return {"ok":True,"tournament_id":tournament_id,"published_bowlers":count,"groups":len(groups)}
@@ -918,7 +928,7 @@ def standings_division(division_slug: str):
         scores = _json.loads(r["scores_json"])
         game_text = " / ".join("—" if x is None else str(x) for x in scores)
         avg = "—" if r["average"] is None else f"{r['average']:.2f}"
-        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(r['first_name'])} {html.escape(r['last_name'])}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
     table = "<p>No bowlers in this division.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>" + "".join(trs) + "</tbody></table></div>"
     body = f"<p><a href='/standings'>← Divisions</a></p><h2>{html.escape(division)}</h2><p><strong>{html.escape(t['name'])}</strong> <span class='status'>{html.escape(t['status'])}</span><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{table}"
     return _page(f"{division} Standings", body)
@@ -941,7 +951,7 @@ def boy_division(division_slug: str):
     for i, r in enumerate(rows, 1):
         avg_text = "—" if r["avg"] is None else f"{r['avg']:.2f}"
         points_text = str(int(r["points"] or 0))
-        tr_parts.append(f"<tr><td>{i}</td><td>{html.escape(r['first_name'])} {html.escape(r['last_name'])}</td><td>{r['tournaments']}</td><td>{avg_text}</td><td>{r['high_game'] or '—'}</td><td>{r['wins']}</td><td>{points_text}</td></tr>")
+        tr_parts.append(f"<tr><td>{i}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{r['tournaments']}</td><td>{avg_text}</td><td>{r['high_game'] or '—'}</td><td>{r['wins']}</td><td>{points_text}</td></tr>")
     trs = "".join(tr_parts)
     table = "<p>No archived performances yet.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>#</th><th>Bowler</th><th>Events</th><th>Qual. Avg.</th><th>High</th><th>Match Wins</th><th>BOY Points</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
     return _page(f"{division} Bowler of the Year", f"<p><a href='/bowler-of-the-year'>← Divisions</a></p><h2>{html.escape(division)} — Bowler of the Year</h2>{table}")
@@ -1006,7 +1016,7 @@ def jr_gold_group(division_slug: str):
     for r in rows:
         scores=_json.loads(r["scores_json"]); games=" / ".join("—" if x is None else str(x) for x in scores); avg="—" if r["average"] is None else f"{r['average']:.2f}"
         boundary=" style='border-bottom:4px solid #1769d2'" if cut and int(r["rank"])==cut else ""
-        trs.append(f"<tr{boundary}><td class='rank'>{r['rank']}</td><td>{html.escape(r['first_name'])} {html.escape(r['last_name'])}</td><td>{html.escape(r['jr_gold_state'])}</td><td class='games'>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        trs.append(f"<tr{boundary}><td class='rank'>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{html.escape(r['jr_gold_state'])}</td><td class='games'>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
     table="<p>No eligible bowlers in this group.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>JG</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>"+"".join(trs)+"</tbody></table></div>"
     note=f"Cut line after place {cut}." if cut else "No cut line set."
     return _page(f"{g['group_name']} Jr. Gold",f"<p><a href='/jr-gold'>← Jr. Gold Divisions</a></p><h2>{html.escape(g['group_name'])} — Jr. Gold Qualifying</h2><p><strong>{html.escape(t['name'])}</strong><br>{html.escape(t['event_date'])} · {html.escape(note)}</p>{table}")
@@ -1032,7 +1042,7 @@ def archive(q: str = ""):
         tr_parts = []
         for r in matches:
             avg_text = "—" if r["qualifying_average"] is None else f"{r['qualifying_average']:.2f}"
-            tr_parts.append(f"<tr><td>{html.escape(r['event_date'])}</td><td>{html.escape(r['tournament_name'])}</td><td>{html.escape(r['first_name'])} {html.escape(r['last_name'])}</td><td>{html.escape(r['division'])}</td><td>{r['qualifying_total']}</td><td>{avg_text}</td><td>{html.escape(r['finish_label'] or '—')}</td></tr>")
+            tr_parts.append(f"<tr><td>{html.escape(r['event_date'])}</td><td>{html.escape(r['tournament_name'])}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{html.escape(r['division'])}</td><td>{r['qualifying_total']}</td><td>{avg_text}</td><td>{html.escape(r['finish_label'] or '—')}</td></tr>")
         trs = "".join(tr_parts)
         result_html = "<h3>Bowler Results</h3>" + ("<p>No matching performances found.</p>" if not matches else "<div class='tablewrap'><table><thead><tr><th>Date</th><th>Tournament</th><th>Bowler</th><th>Division</th><th>Qual. Total</th><th>Avg.</th><th>Match Play</th></tr></thead><tbody>"+trs+"</tbody></table></div>")
     tournament_tiles = "".join(f"<a class='tile' href='/archive/tournament/{html.escape(t['tournament_id'])}'><h2>{html.escape(t['name'])}</h2><p>{html.escape(t['event_date'])} · View final results</p></a>" for t in tournaments)
@@ -1056,6 +1066,6 @@ def archive_tournament_page(tournament_id: str):
             scores=_json.loads(r['scores_json'])
             games=" / ".join("—" if x is None else str(x) for x in scores)
             avg="—" if r['qualifying_average'] is None else f"{r['qualifying_average']:.2f}"
-            tr_parts.append(f"<tr><td>{r['qualifying_rank'] or '—'}</td><td>{html.escape(r['first_name'])} {html.escape(r['last_name'])}</td><td>{games}</td><td>{r['qualifying_total']}</td><td>{avg}</td><td>{html.escape(r['finish_label'] or '—')}</td></tr>")
+            tr_parts.append(f"<tr><td>{r['qualifying_rank'] or '—'}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{games}</td><td>{r['qualifying_total']}</td><td>{avg}</td><td>{html.escape(r['finish_label'] or '—')}</td></tr>")
         body_parts.append(f"<h3>{html.escape(division)}</h3><div class='tablewrap'><table><thead><tr><th>Qual. Rank</th><th>Bowler</th><th>Games 1–6</th><th>Total</th><th>Avg.</th><th>Match Play</th></tr></thead><tbody>{''.join(tr_parts)}</tbody></table></div>")
     return _page(t['name'], ''.join(body_parts))

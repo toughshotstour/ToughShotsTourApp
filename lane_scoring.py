@@ -15,6 +15,18 @@ from datetime import datetime
 from pathlib import Path
 
 
+def proper_name(value):
+    """Normalize ordinary all-upper/all-lower names while preserving intentional mixed case."""
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return ""
+    # Preserve mixed-case spellings such as McDonald/deVries exactly as entered.
+    # Normalize the common CSV-export cases of ALL CAPS or all lowercase.
+    if text.isupper() or text.islower():
+        return text.title()
+    return text
+
+
 def roster_rows(roster_path):
     roster_path = Path(roster_path)
     with roster_path.open("r", newline="", encoding="utf-8-sig") as f:
@@ -28,8 +40,8 @@ def roster_rows(roster_path):
 
     result = []
     for source_row, row in enumerate(rows, start=2):
-        first = (row.get("First_Name") or "").strip()
-        last = (row.get("Last_Name") or "").strip()
+        first = proper_name(row.get("First_Name"))
+        last = proper_name(row.get("Last_Name"))
         division = (row.get("Division") or "").strip()
         birthdate = (row.get("Birthdate_Used") or "").strip()
         if not first or not last or not division:
@@ -59,29 +71,53 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
             f"There are {len(bowlers)} bowlers, so the number of lanes cannot exceed {len(bowlers)}."
         )
 
-    # SystemRandom uses OS randomness and avoids deterministic division/age patterns.
-    shuffled = list(bowlers)
-    random.SystemRandom().shuffle(shuffled)
+    # Lane assignments are division-contained: a lane pair never mixes divisions.
+    # First allocate available lane pairs among divisions (at least one pair per
+    # active division), then balance each division across its own pairs.
+    division_order = ["U12 Mixed", "U14 Boys", "U14 Girls", "U16 Boys", "U16 Girls", "U18 Boys", "U18 Girls"]
+    grouped = {}
+    for bowler in bowlers:
+        grouped.setdefault(bowler["division"], []).append(bowler)
+    active_divisions = [d for d in division_order if d in grouped] + sorted(d for d in grouped if d not in division_order)
 
-    # Balance scorecards (lane pairs) first, then split each pair across its lanes.
-    # This prevents situations such as one scorecard having 6 bowlers while another
-    # has only 4 when the total field can be distributed more evenly.
     pair_lane_numbers = [list(range(start, min(start + 2, lane_count + 1))) for start in range(1, lane_count + 1, 2)]
-    pair_bowlers = [[] for _ in pair_lane_numbers]
-    for idx, bowler in enumerate(shuffled):
-        pair_bowlers[idx % len(pair_bowlers)].append(bowler)
+    pair_count = len(pair_lane_numbers)
+    if pair_count < len(active_divisions):
+        raise ValueError(
+            f"Division-based lane assignment needs at least one lane pair per active division. "
+            f"This roster has {len(active_divisions)} active divisions but {lane_count} lanes provide only {pair_count} lane pairs."
+        )
+
+    # Allocate one pair to each division, then give extra pairs to the division
+    # with the greatest current bowlers-per-pair load. This keeps each division
+    # as evenly spread as the available lane pairs allow.
+    pairs_per_division = {d: 1 for d in active_divisions}
+    for _ in range(pair_count - len(active_divisions)):
+        d = max(active_divisions, key=lambda x: (len(grouped[x]) / pairs_per_division[x], len(grouped[x])))
+        pairs_per_division[d] += 1
 
     lanes = {lane: [] for lane in range(1, lane_count + 1)}
-    for pair_idx, lane_numbers in enumerate(pair_lane_numbers):
-        rows = pair_bowlers[pair_idx]
-        random.SystemRandom().shuffle(rows)
-        # Alternate within each scorecard so the two lanes stay as even as possible.
-        for idx, bowler in enumerate(rows):
-            lane = lane_numbers[idx % len(lane_numbers)]
-            lanes[lane].append(bowler)
+    pair_divisions = {}
+    pair_cursor = 0
+    rng = random.SystemRandom()
+    for division in active_divisions:
+        assigned_pair_indexes = list(range(pair_cursor, pair_cursor + pairs_per_division[division]))
+        pair_cursor += pairs_per_division[division]
+        div_bowlers = list(grouped[division])
+        rng.shuffle(div_bowlers)
+        buckets = [[] for _ in assigned_pair_indexes]
+        for idx, bowler in enumerate(div_bowlers):
+            buckets[idx % len(buckets)].append(bowler)
 
-    for lane_rows in lanes.values():
-        random.SystemRandom().shuffle(lane_rows)
+        for local_idx, pair_index in enumerate(assigned_pair_indexes):
+            lane_numbers = pair_lane_numbers[pair_index]
+            pair_divisions[pair_index] = division
+            rows = buckets[local_idx]
+            rng.shuffle(rows)
+            # Odd/first lane receives the extra bowler when a pair total is odd.
+            for idx, bowler in enumerate(rows):
+                lane = lane_numbers[idx % len(lane_numbers)]
+                lanes[lane].append(bowler)
 
     tournament_id = tournament_id or secrets.token_urlsafe(12)
     lane_rows = [
@@ -92,21 +128,22 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
         for lane in sorted(lanes)
     ]
     lane_pairs = []
-    for pair_index in range(0, len(lane_rows), 2):
-        pair_lanes = lane_rows[pair_index:pair_index + 2]
+    for pair_index, lane_numbers in enumerate(pair_lane_numbers):
         lane_pairs.append({
-            "pair_no": (pair_index // 2) + 1,
+            "pair_no": pair_index + 1,
             "token": secrets.token_urlsafe(24),
-            "lane_nos": [lane["lane_no"] for lane in pair_lanes],
+            "lane_nos": lane_numbers,
+            "division": pair_divisions.get(pair_index, ""),
         })
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "tournament_id": tournament_id,
         "tournament_name": tournament_name.strip() or "Tough Shots Tournament",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "qualifying_games": 6,
         "lane_count": lane_count,
+        "assignment_method": "division_balanced_lane_pairs",
         "lanes": lane_rows,
         "lane_pairs": lane_pairs,
     }
