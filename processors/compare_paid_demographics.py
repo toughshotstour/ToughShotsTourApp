@@ -33,11 +33,47 @@ Optional:
 
 import argparse
 import re
+import sqlite3
 import unicodedata
+from pathlib import Path
 from difflib import SequenceMatcher
 
 import pandas as pd
 
+
+
+def load_demographics(source):
+    """Load demographic information from the local master SQLite database or a legacy CSV."""
+    path = Path(source)
+    if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT first_name,last_name,birthdate,gender,usbc_id,email,division_override,bowler_id,jr_gold_status FROM demographics"
+            ).fetchall()
+        finally:
+            conn.close()
+        data = []
+        for r in rows:
+            # Use the manually selected division when present; otherwise leave it blank
+            # and let the division builder derive it from DOB/gender as before.
+            data.append({
+                "Bowlers First Name": r["first_name"],
+                "Bowlers Last Name": r["last_name"],
+                "Date of birth": r["birthdate"],
+                "Gender": r["gender"] or "",
+                "USBC ID": r["usbc_id"] or "",
+                "Email Address": r["email"] or "",
+                "Division": r["division_override"] or "",
+                "Bowler ID": r["bowler_id"] or "",
+                "Jr Gold Status": r["jr_gold_status"] or "",
+            })
+        return pd.DataFrame(data, columns=[
+            "Bowlers First Name", "Bowlers Last Name", "Date of birth", "Gender",
+            "USBC ID", "Email Address", "Division", "Bowler ID", "Jr Gold Status"
+        ])
+    return pd.read_csv(path)
 
 def clean_text(value):
     """Normalize text for matching."""
@@ -231,7 +267,7 @@ def main():
 
     parser.add_argument(
         "demographic_file",
-        help="TST demographic form response CSV",
+        help="Local master bowler SQLite database (preferred) or legacy demographic CSV",
     )
 
     parser.add_argument(
@@ -243,7 +279,7 @@ def main():
     args = parser.parse_args()
 
     payments = pd.read_csv(args.payment_file)
-    demographics = pd.read_csv(args.demographic_file)
+    demographics = load_demographics(args.demographic_file)
 
     # ------------------------------------------------------------
     # Validate expected columns
@@ -272,7 +308,7 @@ def main():
 
     if missing_demo:
         raise ValueError(
-            "Demographic file is missing columns: "
+            "Local bowler database/demographic source is missing columns: "
             f"{sorted(missing_demo)}"
         )
 
@@ -340,6 +376,12 @@ def main():
     # ------------------------------------------------------------
     if "Email Address" not in demographics.columns:
         demographics["Email Address"] = ""
+    if "Division" not in demographics.columns:
+        demographics["Division"] = ""
+    if "Bowler ID" not in demographics.columns:
+        demographics["Bowler ID"] = ""
+    if "Jr Gold Status" not in demographics.columns:
+        demographics["Jr Gold Status"] = ""
 
     demo_people = []
 
@@ -358,6 +400,9 @@ def main():
                 "Demo_Last_Name": group.iloc[0]["Bowlers Last Name"],
                 "Demo_DOB": group.iloc[0]["Date of birth"],
                 "Gender": join_unique(group["Gender"]),
+                "Division_Override": join_unique(group["Division"]),
+                "Bowler_ID": join_unique(group["Bowler ID"]),
+                "Jr_Gold_Status": join_unique(group["Jr Gold Status"]),
                 "Demographic_Email": join_unique(
                     group["Email Address"]
                 ),
@@ -440,6 +485,9 @@ def main():
                 "First_Name": payment_row["Payment_First_Name"],
                 "Last_Name": payment_row["Payment_Last_Name"],
                 "Gender": demo_row["Gender"],
+                "Division_Override": demo_row.get("Division_Override", ""),
+                "Bowler_ID": demo_row.get("Bowler_ID", ""),
+                "Jr_Gold_Status": demo_row.get("Jr_Gold_Status", ""),
                 "Designation": designation,
                 "Paid_Entry": (
                     "YES" if payment_row["Has_Paid"] else "NO"
@@ -477,6 +525,9 @@ def main():
                 "First_Name": payment_row["Payment_First_Name"],
                 "Last_Name": payment_row["Payment_Last_Name"],
                 "Gender": "",
+                "Division_Override": "",
+                "Bowler_ID": "",
+                "Jr_Gold_Status": "",
                 "Designation": designation,
                 "Paid_Entry": (
                     "YES" if payment_row["Has_Paid"] else "NO"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
@@ -26,7 +27,32 @@ def _pick_header(headers, exact=(), contains=()):
 
 
 def demographic_rows(path):
+    """Read permanent-bowler sync rows from the local master SQLite DB or legacy CSV."""
     path = Path(path)
+    if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT first_name,last_name,birthdate,gender,usbc_id,division_override,bowler_id,jr_gold_status FROM demographics ORDER BY last_name COLLATE NOCASE,first_name COLLATE NOCASE"
+            ).fetchall()
+        finally:
+            conn.close()
+        result=[]
+        for row_no,row in enumerate(rows,start=1):
+            result.append({
+                "first_name": proper_name(row["first_name"]),
+                "last_name": proper_name(row["last_name"]),
+                "birthdate": (row["birthdate"] or "").strip(),
+                "gender": (row["gender"] or "").strip(),
+                "usbc_id": (row["usbc_id"] or "").strip(),
+                "division": (row["division_override"] or "").strip(),
+                "bowler_id": (row["bowler_id"] or "").strip(),
+                "jr_gold_state": (row["jr_gold_status"] or "").strip().upper(),
+                "source_row": row_no,
+            })
+        return result
+
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
@@ -35,14 +61,21 @@ def demographic_rows(path):
         birth = _pick_header(headers, ["Date of birth", "Date of Birth", "DOB"])
         gender = _pick_header(headers, ["Gender", "Bowler Gender"])
         usbc = _pick_header(headers, ["USBC ID", "USBC Number", "USBC Membership ID", "USBC #"], contains=("usbc",))
+        division = _pick_header(headers, ["Division"])
+        bowler_id = _pick_header(headers, ["Bowler ID", "BowlerID"])
+        jr_gold = _pick_header(headers, ["Jr Gold Status", "JR Gold Status", "JG Status"])
         missing = [label for label, col in [("first name",first),("last name",last),("birthdate",birth),("gender",gender),("USBC ID",usbc)] if not col]
         if missing:
-            raise ValueError("Demographic form is missing recognizable columns for: " + ", ".join(missing) + ". The USBC column name must contain 'USBC'.")
+            raise ValueError("Demographic source is missing recognizable columns for: " + ", ".join(missing) + ". The USBC column name must contain 'USBC'.")
         result=[]
         for row_no,row in enumerate(reader,start=2):
             if not any((v or "").strip() for v in row.values()):
                 continue
-            result.append({"first_name":proper_name(row.get(first)),"last_name":proper_name(row.get(last)),"birthdate":(row.get(birth) or "").strip(),"gender":(row.get(gender) or "").strip(),"usbc_id":(row.get(usbc) or "").strip(),"source_row":row_no})
+            item={"first_name":proper_name(row.get(first)),"last_name":proper_name(row.get(last)),"birthdate":(row.get(birth) or "").strip(),"gender":(row.get(gender) or "").strip(),"usbc_id":(row.get(usbc) or "").strip(),"source_row":row_no}
+            if division: item["division"]=(row.get(division) or "").strip()
+            if bowler_id: item["bowler_id"]=(row.get(bowler_id) or "").strip()
+            if jr_gold: item["jr_gold_state"]=(row.get(jr_gold) or "").strip().upper()
+            result.append(item)
     return result
 
 

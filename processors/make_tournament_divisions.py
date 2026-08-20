@@ -315,6 +315,14 @@ def main():
         axis=1,
     )
 
+    # A manually selected division in the reusable local bowler database
+    # overrides the calculated age/gender division for tournament placement.
+    if "Division_Override" in eligible.columns:
+        valid_divisions = {"U12 Mixed", "U14 Boys", "U14 Girls", "U16 Boys", "U16 Girls", "U18 Boys", "U18 Girls"}
+        override = eligible["Division_Override"].fillna("").astype(str).str.strip()
+        mask = override.isin(valid_divisions)
+        eligible.loc[mask, "Division"] = override[mask]
+
     # ------------------------------------------------------------
     # Anything without a final division goes to needs_review.csv.
     #

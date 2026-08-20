@@ -38,3 +38,7 @@ Tournament data is not source code and stays under `TournamentWorkspace/` at run
 ## Reloading an active tournament
 
 Use **4 Tournament → Reload Tournament from Workspace** after reopening the desktop suite. It resumes the SQLite tournament database directly, so qualifying scores, cuts, Jr. Gold settings, seeding, bracket state, and match-play results are retained.
+
+## Managing the local bowler database
+
+Open **2 — Bowler Database** and choose **Manage Local Bowlers** to search, add, edit, or remove local records. Changes are written to both `local_demographics.sqlite3` and `demographic_master.csv`. The generated 10-digit Bowler ID is intentionally read-only so archived results remain linked to the same person. Jr. Gold state and manual division overrides can be edited here; the permanent-bowler sync carries those values to the private cloud database.

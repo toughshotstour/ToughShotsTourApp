@@ -723,15 +723,28 @@ async def api_import_bowlers(request: Request, x_admin_key: str | None = Header(
                 division = str(item.get("division", "")).strip() or _division_for(birthdate, gender)
                 if not first or not last or not division:
                     raise ValueError("first name, last name, gender/birthdate division, and USBC ID are required")
+                requested_state = str(item.get("jr_gold_state", "")).strip().upper() if "jr_gold_state" in item else None
+                if requested_state is not None and requested_state not in {"", "JG", "Q"}:
+                    raise ValueError("Jr. Gold state must be blank, JG, or Q")
                 existing = _resolve_permanent(conn, first, last, birthdate)
                 if existing:
-                    conn.execute("UPDATE permanent_bowlers SET usbc_id_raw=?,first_name=?,last_name=?,gender=?,birthdate=?,division=?,updated_at=? WHERE bowler_id=?",
-                                 (raw_usbc, first, last, gender, birthdate, division, now_iso(), existing["bowler_id"]))
+                    if requested_state is None:
+                        conn.execute("UPDATE permanent_bowlers SET usbc_id_raw=?,first_name=?,last_name=?,gender=?,birthdate=?,division=?,updated_at=? WHERE bowler_id=?",
+                                     (raw_usbc, first, last, gender, birthdate, division, now_iso(), existing["bowler_id"]))
+                    else:
+                        conn.execute("UPDATE permanent_bowlers SET usbc_id_raw=?,first_name=?,last_name=?,gender=?,birthdate=?,division=?,jr_gold_state=?,updated_at=? WHERE bowler_id=?",
+                                     (raw_usbc, first, last, gender, birthdate, division, requested_state, now_iso(), existing["bowler_id"]))
                     updated += 1
                 else:
-                    bowler_id = _allocate_bowler_id(conn, raw_usbc)
+                    requested_id = str(item.get("bowler_id", "")).strip()
+                    if requested_id:
+                        if not (requested_id.isdigit() and len(requested_id) == 10):
+                            raise ValueError("Bowler ID must be exactly 10 digits")
+                        if conn.execute("SELECT 1 FROM permanent_bowlers WHERE bowler_id=?", (requested_id,)).fetchone():
+                            requested_id = ""
+                    bowler_id = requested_id or _allocate_bowler_id(conn, raw_usbc)
                     conn.execute("INSERT INTO permanent_bowlers(bowler_id,usbc_id_raw,first_name,last_name,gender,birthdate,division,jr_gold_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                                 (bowler_id, raw_usbc, first, last, gender, birthdate, division, "", now_iso(), now_iso()))
+                                 (bowler_id, raw_usbc, first, last, gender, birthdate, division, requested_state or "", now_iso(), now_iso()))
                     created += 1
             except Exception as exc:
                 skipped += 1
@@ -846,7 +859,7 @@ async def api_archive_tournament(request: Request, x_admin_key: str | None = Hea
                 [(tournament_id, bid) for bid in promoted_ids],
             )
         conn.commit()
-    return {"ok": True, "archived": len(rows), "unmatched_bowlers": unmatched, "points_formula_configured": True, "jr_gold_promoted": len(promoted_ids)}
+    return {"ok": True, "archived": len(rows), "unmatched_bowlers": unmatched, "points_formula_configured": True, "jr_gold_promoted": len(promoted_ids), "jr_gold_promoted_ids": promoted_ids}
 
 
 @app.post("/api/public/jr-gold")

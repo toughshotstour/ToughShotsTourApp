@@ -3,7 +3,7 @@
 
 A single, guided front end for the four tools in this project:
 1. Payment reconciliation
-2. Paid/demographic matching
+2. Tournament entries matched to the local master bowler database
 3. Division creation
 4. Tournament scoring and bracket management
 
@@ -31,7 +31,13 @@ from core.lane_scoring import (
     reset_scorer_pin, delete_scorer,
 )
 from core.import_archive import archive_imports
-from core.local_demographics import update_from_csv as update_local_demographic_db, require_snapshot as require_demographic_snapshot, export_snapshot as export_demographic_snapshot, count_rows as local_demographic_count
+from core.local_demographics import (
+    update_from_csv as update_local_demographic_db,
+    require_database as require_local_bowler_database,
+    count_rows as local_demographic_count,
+    list_local_bowlers, add_local_bowler, update_local_bowler, delete_local_bowler,
+    set_local_jr_gold_by_bowler_ids, DIVISIONS as LOCAL_DIVISIONS,
+)
 from core.results_portal import (
     import_bowlers as portal_import_bowlers, list_bowlers as portal_list_bowlers,
     set_jr_gold as portal_set_jr_gold, publish_qualifying as portal_publish_qualifying,
@@ -294,7 +300,7 @@ class ToughShotsApp(tk.Tk):
         nav_items = [
             ("overview", "Overview"),
             ("payments", "1  Payment Check"),
-            ("demographics", "2  Demographics"),
+            ("demographics", "2  Bowler Database"),
             ("divisions", "3  Divisions"),
             ("tournament", "4  Tournament"),
             ("lanes", "5  Lanes + Mobile"),
@@ -451,8 +457,8 @@ class ToughShotsApp(tk.Tk):
     def _build_demographics_page(self):
         page = WorkflowPage(
             self.page_host,
-            "Local Demographic Database",
-            "Import a demographic form only when it changes. The app keeps a reusable local database and uses it automatically for tournament matching and division placement.",
+            "Local Master Bowler Database",
+            "Import a demographic form only to create or update the master bowler database. Tournament prep, entry checks, divisions, Jr. Gold, and cloud sync use the database itself.",
         )
         body = page.body
         FilePicker(
@@ -472,8 +478,9 @@ class ToughShotsApp(tk.Tk):
         ).grid(row=1, column=0, sticky="ew", pady=(0, 18))
         actions = ttk.Frame(body, style="Card.TFrame")
         actions.grid(row=2, column=0, sticky="w")
-        ttk.Button(actions, text="Update Local Demographic Database", command=self.update_local_demographics, style="Primary.TButton").pack(side="left")
-        ttk.Button(actions, text="Run Match Using Local Database", command=self.run_demographics, style="Secondary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions, text="Update Master Database from Demographic Form", command=self.update_local_demographics, style="Primary.TButton").pack(side="left")
+        ttk.Button(actions, text="Manage Local Bowlers", command=self.manage_local_bowlers, style="Secondary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions, text="Check Entries Against Master Database", command=self.run_demographics, style="Secondary.TButton").pack(side="left")
         return page
 
     def _build_divisions_page(self):
@@ -820,6 +827,172 @@ class ToughShotsApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Demographic update failed", str(exc), parent=self)
 
+    def manage_local_bowlers(self):
+        workspace = Path(self.workspace_var.get()).expanduser()
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        win = tk.Toplevel(self)
+        win.title("Manage Local Bowlers")
+        win.geometry("1120x680")
+        win.minsize(900, 560)
+        outer = ttk.Frame(win, padding=14)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=3)
+        outer.columnconfigure(1, weight=2)
+        outer.rowconfigure(2, weight=1)
+
+        ttk.Label(outer, text="Local Bowler Database", font=("Segoe UI", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(outer, text="Search and correct the local master bowler database. The CSV export is updated automatically as a convenience copy.", wraplength=1000, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 10))
+
+        left = ttk.Frame(outer)
+        left.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(1, weight=1)
+        search_var = tk.StringVar()
+        search_row = ttk.Frame(left)
+        search_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        search_row.columnconfigure(0, weight=1)
+        ttk.Label(search_row, text="Search").grid(row=0, column=0, sticky="w")
+        search_entry = ttk.Entry(search_row, textvariable=search_var)
+        search_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        cols = ("name", "division", "usbc", "bowler_id", "jg")
+        tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
+        for c, label, width in zip(cols, ("Bowler", "Division", "USBC ID", "Bowler ID", "JG"), (190, 110, 110, 110, 45)):
+            tree.heading(c, text=label)
+            tree.column(c, width=width, anchor="w")
+        tree.grid(row=1, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=tree.yview)
+        scroll.grid(row=1, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scroll.set)
+
+        form = ttk.LabelFrame(outer, text="Bowler Details", padding=12)
+        form.grid(row=2, column=1, sticky="nsew")
+        form.columnconfigure(1, weight=1)
+
+        first_var, last_var = tk.StringVar(), tk.StringVar()
+        gender_var, birth_var = tk.StringVar(), tk.StringVar()
+        division_var, usbc_var = tk.StringVar(), tk.StringVar()
+        bowler_id_var, jg_var, email_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        selected_key = {"value": None}
+
+        def field(row, label, var, widget="entry", values=None, readonly=False):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=5)
+            if widget == "combo":
+                w = ttk.Combobox(form, textvariable=var, values=values or [], state="readonly")
+            else:
+                w = ttk.Entry(form, textvariable=var, state="readonly" if readonly else "normal")
+            w.grid(row=row, column=1, sticky="ew", pady=5)
+            return w
+
+        field(0, "First name", first_var)
+        field(1, "Last name", last_var)
+        field(2, "Gender", gender_var, "combo", ["Boy", "Girl"])
+        field(3, "Birthdate", birth_var)
+        field(4, "Division", division_var, "combo", [""] + list(LOCAL_DIVISIONS))
+        field(5, "USBC ID", usbc_var)
+        field(6, "Bowler ID", bowler_id_var, readonly=True)
+        ttk.Label(form, text="Bowler ID stays fixed once generated so past results remain linked.", style="Hint.TLabel", wraplength=340, justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        field(8, "Jr. Gold status", jg_var, "combo", ["", "JG", "Q"])
+        field(9, "Email", email_var)
+
+        status = tk.StringVar(value="")
+        ttk.Label(form, textvariable=status, style="Hint.TLabel", wraplength=340, justify="left").grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 4))
+
+        def clear_form():
+            selected_key["value"] = None
+            for v in (first_var, last_var, gender_var, birth_var, division_var, usbc_var, bowler_id_var, jg_var, email_var):
+                v.set("")
+            tree.selection_remove(tree.selection())
+            status.set("Enter details, then choose Add Bowler.")
+
+        def rows_now():
+            return list_local_bowlers(workspace, search_var.get())
+
+        def refresh(select_key=None):
+            current = select_key or selected_key["value"]
+            tree.delete(*tree.get_children())
+            for b in rows_now():
+                iid = b["identity_key"]
+                tree.insert("", "end", iid=iid, values=(f"{b['first_name']} {b['last_name']}", b.get("division") or "", b.get("usbc_id") or "", b.get("bowler_id") or "", b.get("jr_gold_status") or ""))
+            if current and tree.exists(current):
+                tree.selection_set(current); tree.focus(current); tree.see(current)
+            status.set(f"{len(tree.get_children())} bowlers shown")
+
+        def load_selected(_event=None):
+            sel = tree.selection()
+            if not sel:
+                return
+            key = sel[0]
+            match = next((b for b in list_local_bowlers(workspace) if b["identity_key"] == key), None)
+            if not match:
+                return
+            selected_key["value"] = key
+            first_var.set(match.get("first_name") or "")
+            last_var.set(match.get("last_name") or "")
+            gender_var.set(match.get("gender") or "")
+            birth_var.set(match.get("birthdate") or "")
+            division_var.set(match.get("division") or "")
+            usbc_var.set(match.get("usbc_id") or "")
+            bowler_id_var.set(match.get("bowler_id") or "")
+            jg_var.set(match.get("jr_gold_status") or "")
+            email_var.set(match.get("email") or "")
+            status.set("Editing selected local bowler.")
+
+        def payload():
+            return dict(first_name=first_var.get(), last_name=last_var.get(), gender=gender_var.get(), birthdate=birth_var.get(), usbc_id=usbc_var.get(), division=division_var.get(), jr_gold_status=jg_var.get(), email=email_var.get())
+
+        def add_record():
+            try:
+                bid = add_local_bowler(workspace, **payload())
+                refresh()
+                clear_form()
+                status.set(f"Bowler added. Generated Bowler ID: {bid}")
+            except Exception as exc:
+                messagebox.showerror("Could not add bowler", str(exc), parent=win)
+
+        def save_record():
+            key = selected_key["value"]
+            if not key:
+                messagebox.showinfo("Select a bowler", "Select a bowler to edit, or use Add Bowler for a new record.", parent=win)
+                return
+            try:
+                bid = update_local_bowler(workspace, key, **payload())
+                # USBC edits can change identity_key, so locate by the stable Bowler ID afterward.
+                match = next((b for b in list_local_bowlers(workspace) if b.get("bowler_id") == bid), None)
+                selected_key["value"] = match["identity_key"] if match else None
+                refresh(selected_key["value"])
+                status.set("Changes saved to the local master bowler database.")
+            except Exception as exc:
+                messagebox.showerror("Could not save bowler", str(exc), parent=win)
+
+        def remove_record():
+            key = selected_key["value"]
+            if not key:
+                messagebox.showinfo("Select a bowler", "Select the bowler you want to remove.", parent=win)
+                return
+            name = f"{first_var.get()} {last_var.get()}".strip()
+            if not messagebox.askyesno("Remove local bowler", f"Remove {name} from the local bowler database?\n\nThis does not delete already archived tournament results or the cloud permanent-bowler record.", parent=win):
+                return
+            try:
+                delete_local_bowler(workspace, key)
+                clear_form(); refresh()
+                status.set(f"{name} removed from the local database.")
+            except Exception as exc:
+                messagebox.showerror("Could not remove bowler", str(exc), parent=win)
+
+        buttons = ttk.Frame(form)
+        buttons.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        tk.Button(buttons, text="Add Bowler", command=add_record, padx=12, pady=6).pack(side="left")
+        tk.Button(buttons, text="Save Changes", command=save_record, padx=12, pady=6).pack(side="left", padx=6)
+        tk.Button(buttons, text="New / Clear", command=clear_form, padx=12, pady=6).pack(side="left")
+        tk.Button(buttons, text="Remove Bowler", command=remove_record, padx=12, pady=6).pack(side="right")
+
+        tree.bind("<<TreeviewSelect>>", load_selected)
+        search_var.trace_add("write", lambda *_: refresh())
+        search_entry.bind("<Escape>", lambda _e: search_var.set(""))
+        refresh()
+
     def run_demographics(self):
         if not self._require_files(("Payment status CSV", self.payment_input_var.get())):
             return
@@ -827,23 +1000,23 @@ class ToughShotsApp(tk.Tk):
             return
         workspace = Path(self.workspace_var.get()).expanduser()
         try:
-            demographic_master = require_demographic_snapshot(workspace)
+            local_bowler_db = require_local_bowler_database(workspace)
         except Exception as exc:
-            messagebox.showerror("Local demographics required", str(exc), parent=self)
+            messagebox.showerror("Master bowler database required", str(exc), parent=self)
             return
         if not self._archive_inputs(
             "demographic_match",
             ("payment_status", self.payment_input_var.get()),
-            ("local_demographic_snapshot", demographic_master),
+            ("local_bowler_database", local_bowler_db),
         ):
             return
         output = workspace / "paid_demographic_check.csv"
         command = [
             sys.executable, str(DEMOGRAPHIC_SCRIPT), self.payment_input_var.get(),
-            str(demographic_master), "--output", str(output),
+            str(local_bowler_db), "--output", str(output),
         ]
         self._run_command_async(
-            "Demographic match", command,
+            "Master database match", command,
             before=lambda: workspace.mkdir(parents=True, exist_ok=True),
             after=lambda: self._after_demographics(output),
         )
@@ -886,16 +1059,16 @@ class ToughShotsApp(tk.Tk):
         self._sync_pipeline_paths()
         workspace = Path(self.workspace_var.get()).expanduser()
         try:
-            demographic_master = require_demographic_snapshot(workspace)
+            local_bowler_db = require_local_bowler_database(workspace)
         except Exception as exc:
-            messagebox.showerror("Local demographics required", str(exc), parent=self)
+            messagebox.showerror("Master bowler database required", str(exc), parent=self)
             self.show_page("demographics")
             return
         if not self._archive_inputs(
             "full_prep_pipeline",
             ("tournament_registration", self.registration_var.get()),
             ("square_transactions", self.transactions_var.get()),
-            ("local_demographic_snapshot", demographic_master),
+            ("local_bowler_database", local_bowler_db),
         ):
             return
 
@@ -904,7 +1077,7 @@ class ToughShotsApp(tk.Tk):
         division_dir = workspace / "tournament_divisions"
         commands = [
             ("1 of 3 — Payment check", [sys.executable, str(PAYMENT_SCRIPT), self.registration_var.get(), self.transactions_var.get(), "--output", str(payment)]),
-            ("2 of 3 — Match local demographics", [sys.executable, str(DEMOGRAPHIC_SCRIPT), str(payment), str(demographic_master), "--output", str(demographic)]),
+            ("2 of 3 — Check entries against master database", [sys.executable, str(DEMOGRAPHIC_SCRIPT), str(payment), str(local_bowler_db), "--output", str(demographic)]),
             ("3 of 3 — Division builder", [sys.executable, str(DIVISION_SCRIPT), str(demographic), "--output-dir", str(division_dir)]),
         ]
         self._busy = True
@@ -982,7 +1155,7 @@ class ToughShotsApp(tk.Tk):
 
     def _after_demographics(self, output: Path):
         self.division_input_var.set(str(output))
-        self.status_var.set(f"Demographic match complete — saved {output.name}")
+        self.status_var.set(f"Master database match complete — saved {output.name}")
 
     def _after_divisions(self, output_dir: Path):
         roster = output_dir / "all_divisions.csv"
@@ -1369,10 +1542,10 @@ class ToughShotsApp(tk.Tk):
     def import_permanent_bowlers(self):
         try:
             url,key=self._portal_credentials()
-            demo=require_demographic_snapshot(Path(self.workspace_var.get()).expanduser())
+            demo=require_local_bowler_database(Path(self.workspace_var.get()).expanduser())
         except Exception as exc:
             messagebox.showerror("Permanent bowler sync",str(exc),parent=self); return
-        self.status_var.set("Updating permanent bowler database from local demographics…")
+        self.status_var.set("Updating permanent bowler database from the local master bowler database…")
         def worker():
             try:
                 result=portal_import_bowlers(url,key,demo)
@@ -1480,6 +1653,12 @@ class ToughShotsApp(tk.Tk):
         self.status_var.set("Tournament archived — BOY points updated")
         unmatched=result.get("unmatched_bowlers",0)
         promoted=result.get("jr_gold_promoted",0)
+        promoted_ids=result.get("jr_gold_promoted_ids") or []
+        if promoted_ids:
+            try:
+                set_local_jr_gold_by_bowler_ids(Path(self.workspace_var.get()).expanduser(), promoted_ids, "Q")
+            except Exception:
+                pass
         messagebox.showinfo("Tournament Archived",f"Saved {result.get('archived',0)} bowler performances to the public archive and recalculated Bowler-of-the-Year points.\n\nJr. Gold bowlers newly qualified: {promoted}\nUnmatched permanent bowlers: {unmatched}",parent=self)
 
     def reset_for_next_tournament(self):

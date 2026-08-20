@@ -5,7 +5,7 @@ A guided desktop application for tournament preparation, division creation, bowl
 ## Main workflow
 
 1. **Payment Check** - reconcile registrations against completed Square payments.
-2. **Local Demographic Database** - import demographic exports only when they change; tournament prep reuses the local database automatically.
+2. **Local Master Bowler Database** - demographic exports are used only to create/update this database; all tournament workflows read demographic information from the database itself.
 3. **Division Builder** - create the tournament division rosters.
 4. **Tournament Manager** - six-game qualifying, cuts, seeding, match play, brackets, autosave, and exports.
 5. **Lanes + Mobile** - randomly balance all bowlers across available lanes, publish lane-pair mobile scoring pages, manage individual scorer PINs, generate QR-coded paper score sheets, and sync phone-entered qualifying scores back to the Tournament Manager database.
@@ -147,6 +147,6 @@ The Render service now also hosts a public Tough Shots landing page with qualify
 
 ## Reusable local demographics and tournament reset
 
-The demographic form is no longer required alongside each tournament registration. In **2 Demographics**, choose a new demographic export only when needed and click **Update Local Demographic Database**. The workspace stores `local_demographics.sqlite3` plus a generated `demographic_master.csv`; the full prep pipeline uses that snapshot automatically.
+The demographic form is only an import/update source. In **2 Bowler Database**, import a new demographic export only when needed. The authoritative source is `local_demographics.sqlite3`; tournament entry checks, roster enrichment, division placement, Jr. Gold information, and permanent-bowler sync read directly from that database. `demographic_master.csv` is retained only as a convenient human-readable export.
 
 After a tournament has been published to the cloud archive, use **6 Bowlers + Results → Reset for Next Tournament**. The button moves the current payment, division, Tournament Manager database, and lane-scoring files into a timestamped `completed_tournaments` folder and clears the active tournament selections. It deliberately preserves `local_demographics.sqlite3`, `demographic_master.csv`, `imported_files`, cloud permanent bowlers/Jr. Gold states, scorer PINs, and the public archive.
