@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
-from lane_scoring import _json_request, normalize_base_url, proper_name
+from core.lane_scoring import _json_request, normalize_base_url, proper_name
 
 DIVISIONS = ["U12 Mixed","U14 Boys","U14 Girls","U16 Boys","U16 Girls","U18 Boys","U18 Girls"]
 
@@ -72,7 +72,7 @@ def _current_tournament_id(manifest_path, db_path):
 
 
 def qualifying_payload(roster_path, manifest_path, tournament_name, event_date=None):
-    from TournamentCode.bowling_tournament_manager import TournamentDB, resolve_database_path
+    from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
     db_path = resolve_database_path(Path(roster_path))
     tdb = TournamentDB(db_path)
     try:
@@ -166,7 +166,7 @@ def _jg_settings(tdb):
 
 
 def jr_gold_payload(base_url, admin_key, roster_path, manifest_path, tournament_name, event_date=None):
-    from TournamentCode.bowling_tournament_manager import TournamentDB, resolve_database_path
+    from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
     db_path = resolve_database_path(Path(roster_path)); tdb = TournamentDB(db_path)
     try:
         if not tdb.roster_loaded(): tdb.import_roster(Path(roster_path))
@@ -222,7 +222,7 @@ def publish_jr_gold(base_url, admin_key, roster_path, manifest_path, tournament_
 
 
 def archive_payload(roster_path, manifest_path, tournament_name, event_date=None):
-    from TournamentCode.bowling_tournament_manager import TournamentDB, resolve_database_path
+    from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
     db_path=resolve_database_path(Path(roster_path)); tdb=TournamentDB(db_path)
     try:
         if not tdb.roster_loaded():

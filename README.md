@@ -46,13 +46,13 @@ Tkinter is included with standard Python installations on Windows and macOS. Som
 
 ## Cloud/mobile scoring
 
-See **[CLOUD_MOBILE_SETUP.md](CLOUD_MOBILE_SETUP.md)** for the deployment and event-day instructions.
+See **[docs/CLOUD_MOBILE_SETUP.md](docs/CLOUD_MOBILE_SETUP.md)** for the deployment and event-day instructions.
 
 The included cloud service is a FastAPI application in `cloud/`, and `render.yaml` is provided to make deployment as small as possible.
 
 ## Lane assignment behavior
 
-Lane assignment deliberately ignores division, age, and gender. Every eligible bowler is shuffled together and distributed across **lane pairs first**, so scorecard totals differ by no more than one bowler. Each pair is then split as evenly as possible between its two lanes. This prevents a 6-bowler scorecard from existing alongside a 4-bowler scorecard when the field can be balanced more evenly.
+Lane assignment balances the **lane-pair scorecards first**, so pair totals differ by no more than one bowler. It then keeps bowlers from the same division together as much as possible. Divisions may share a pair when needed to preserve even scorecard sizes, but bowlers from the same division stay grouped together instead of being interleaved.
 
 Preparing lane scoring creates:
 
@@ -64,8 +64,34 @@ TournamentWorkspace/
     └── lane_scoresheets.pdf
 ```
 
-The PDF has one landscape page per lane pair, names pre-filled in a compact bowling-sheet grid, six game columns, a total column, and one shared QR code that opens both lanes on the mobile scoring page. Odd lanes use A/B/C positions and even lanes use D/E/F. The public results URL is printed immediately below the competitor table. Scorers authenticate with individual six-digit PINs; scores remain editable and changes are audit-attributed.
+The PDF has one landscape page per lane pair, names pre-filled in a compact bowling-sheet grid, six game columns, a total column, and one shared QR code that opens both lanes on the mobile scoring page. Position letters run sequentially across the pair: the odd lane receives the first half rounded up and the even lane receives the remaining letters. The public results URL is printed immediately below the competitor table. Scorers authenticate with individual six-digit PINs; scores remain editable and changes are audit-attributed.
 
+
+
+## Resume a saved tournament
+
+Tournament Manager scores, cuts, Jr. Gold settings, seeds, brackets, and match-play state are stored in the active workspace SQLite database. If you accidentally close Tournament Manager, reopen the desktop suite and go to **4 Tournament → Reload Tournament from Workspace**. The suite detects the active `all_divisions.csv`, its saved tournament database, lane manifest, lane score sheets, event name, and lane count, then opens the manager directly in resume mode.
+
+The reload button resumes only the **active** workspace. Tournaments moved by **Reset for Next Tournament** remain preserved under `TournamentWorkspace/completed_tournaments/`.
+
+## Project layout
+
+The source tree is organized by responsibility:
+
+```text
+ToughShotsApp/
+├── app.py                    # desktop launcher
+├── desktop/                  # desktop suite UI
+├── core/                     # lane scoring, demographics, archive, cloud publishing helpers
+├── processors/               # payment, demographic matching, and division scripts
+├── tournament/               # Tournament Manager and local SQLite scoring logic
+├── cloud/                    # Render/FastAPI service
+├── docs/                     # setup and workflow documentation
+├── render.yaml               # Render Blueprint
+├── requirements.txt
+├── run_app.bat
+└── run_app.command
+```
 
 ## Automatic copies of imported files
 
@@ -111,7 +137,7 @@ The Tournament Manager stores its local SQLite database next to `all_divisions.c
 
 ## Permanent bowlers and public results
 
-The Render service now also hosts a public Tough Shots landing page with qualifying standings for all seven divisions, Bowler-of-the-Year pages, and a historical tournament archive. The desktop application's **6 Bowlers + Results** page manages the private permanent bowler database, Jr. Gold status, one-click qualifying publication, and end-of-tournament archive/season uploads. See `PUBLIC_RESULTS_SETUP.md` for the workflow.
+The Render service now also hosts a public Tough Shots landing page with qualifying standings for all seven divisions, Bowler-of-the-Year pages, and a historical tournament archive. The desktop application's **6 Bowlers + Results** page manages the private permanent bowler database, Jr. Gold status, one-click qualifying publication, and end-of-tournament archive/season uploads. See `docs/PUBLIC_RESULTS_SETUP.md` for the workflow.
 
 ### Added results features
 - Automatic Bowler-of-the-Year points: reverse qualifying placement points + 5 per match win + champion/runner-up bonuses.

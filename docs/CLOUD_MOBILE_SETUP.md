@@ -78,7 +78,7 @@ Each page contains:
 - Game 1 through Game 6 boxes;
 - a total column;
 - one QR code for the two-lane pair;
-- odd-lane positions A/B/C and even-lane positions D/E/F;
+- sequential position letters across each pair, with the first half on the odd lane and the remainder on the even lane;
 - the public Tough Shots site URL directly below the competitor rows.
 
 Before scoring, use **Manage Scorer PINs** on the desktop Lanes + Mobile page to add each authorized scorer. You choose a private six-digit PIN for each scorer. PINs must be unique. A scorer scans the lane-pair QR code with a phone camera, enters their PIN the first time, and then sees both lanes on that sheet with six score fields per bowler. Their phone remains signed in for up to 12 hours unless they sign out or you set a new PIN for them. Scorecards do not lock after submission; authorized scorers can make corrections later.

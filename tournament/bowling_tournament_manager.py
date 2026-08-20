@@ -2058,6 +2058,11 @@ def main():
         "--db",
         help="Optional path for tournament SQLite database",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an existing tournament database without showing the resume/start-over prompt.",
+    )
     args = parser.parse_args()
 
     hidden_root = tk.Tk()
@@ -2092,25 +2097,26 @@ def main():
         if db_exists and db.roster_loaded():
             old_roster = db.get_meta("roster_path", "")
 
-            resume = messagebox.askyesnocancel(
-                "Existing Tournament Found",
-                (
-                    f"A saved tournament database already exists:\n\n"
-                    f"{db_path}\n\n"
-                    "Yes = Resume it\n"
-                    "No = Start over using the current roster\n"
-                    "Cancel = Exit"
-                ),
-                parent=hidden_root,
-            )
+            if not args.resume:
+                resume = messagebox.askyesnocancel(
+                    "Existing Tournament Found",
+                    (
+                        f"A saved tournament database already exists:\n\n"
+                        f"{db_path}\n\n"
+                        "Yes = Resume it\n"
+                        "No = Start over using the current roster\n"
+                        "Cancel = Exit"
+                    ),
+                    parent=hidden_root,
+                )
 
-            if resume is None:
-                db.close()
-                hidden_root.destroy()
-                return
+                if resume is None:
+                    db.close()
+                    hidden_root.destroy()
+                    return
 
-            if resume is False:
-                db.import_roster(roster_path)
+                if resume is False:
+                    db.import_roster(roster_path)
 
         else:
             db.import_roster(roster_path)
