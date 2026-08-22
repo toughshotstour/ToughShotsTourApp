@@ -42,3 +42,13 @@ Use **4 Tournament → Reload Tournament from Workspace** after reopening the de
 ## Managing the local bowler database
 
 Open **2 — Bowler Database** and choose **Manage Local Bowlers** to search, add, edit, or remove local records. Changes are written to both `local_demographics.sqlite3` and `demographic_master.csv`. The generated 10-digit Bowler ID is intentionally read-only so archived results remain linked to the same person. Jr. Gold state and manual division overrides can be edited here; the permanent-bowler sync carries those values to the private cloud database.
+
+## Printing
+
+The desktop suite has a shared **Print title** setting on the Lane Assignment + Mobile Scoring page. The value is saved with the active workspace and passed into Tournament Manager. It appears at the top of lane score sheets, qualifying score pages, and match-play bracket pages.
+
+Tournament Manager includes:
+- **Print Qualifying Page** on the Qualifying tab for the selected division.
+- **Print Current Round - All Divisions** on Match Play. It finds the largest unfinished round anywhere in the tournament and prints only divisions currently in that same round. For example, while any divisions are still in the Round of 16, Round-of-8 divisions are skipped. Each selected division uses four matches (8 bowlers) per page, with 4- or 2-bowler sheets as later rounds shrink.
+
+Generated forms are saved beside the tournament database under `printed_forms/` before being sent to the default printer. If direct printing is unavailable, the PDF is opened/saved for manual printing.

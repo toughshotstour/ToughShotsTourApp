@@ -342,7 +342,7 @@ def _position_label(index):
         label = chr(ord("A") + rem) + label
     return label
 
-def create_scoresheet_pdf(manifest, output_path, base_url):
+def create_scoresheet_pdf(manifest, output_path, base_url, print_title=""):
     """Create one landscape letter score sheet per balanced lane pair, with one QR per pair."""
     try:
         import qrcode
@@ -387,19 +387,25 @@ def create_scoresheet_pdf(manifest, output_path, base_url):
         c.setFont("Helvetica-Bold", 7)
         c.drawCentredString(page_w - margin - qr_size / 2, top - qr_size - 9, "SCAN TO SCORE")
 
-        # Clean three-line heading requested for the qualifying sheet.
+        # Shared event print title, followed by the compact Tough Shots heading.
         header_left = margin
         header_right = page_w - margin - qr_size - 0.15 * inch
+        title_offset = 0
+        clean_title = (print_title or "").strip()
+        if clean_title:
+            c.setFont("Helvetica-Bold", 16)
+            c.drawCentredString((header_left + header_right) / 2, top - 14, clean_title)
+            title_offset = 20
         c.setFont("Helvetica-Bold", 15)
-        c.drawString(header_left, top - 14, "Tough Shots Tour")
+        c.drawString(header_left, top - 14 - title_offset, "Tough Shots Tour")
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(header_left, top - 32, "Qualifying - 6 Games")
+        c.drawString(header_left, top - 32 - title_offset, "Qualifying - 6 Games")
         c.setFont("Helvetica-Bold", 13)
-        c.drawString(header_left, top - 51, _pair_label(lane_nos))
+        c.drawString(header_left, top - 51 - title_offset, _pair_label(lane_nos))
         c.setLineWidth(1.5)
-        c.line(header_left, top - 60, header_right, top - 60)
+        c.line(header_left, top - 60 - title_offset, header_right, top - 60 - title_offset)
 
-        table_top = top - qr_size - 0.20 * inch
+        table_top = top - qr_size - 0.20 * inch - title_offset
         table_left = margin
         table_right = page_w - margin
         table_width = table_right - table_left

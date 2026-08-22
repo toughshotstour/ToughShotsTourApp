@@ -146,6 +146,7 @@ class ToughShotsApp(tk.Tk):
         )
         self.tournament_roster_var = tk.StringVar()
         self.event_name_var = tk.StringVar(value="Tough Shots Tournament")
+        self.print_title_var = tk.StringVar(value="")
         self.lane_count_var = tk.StringVar(value="8")
         self.cloud_url_var = tk.StringVar()
         self.cloud_admin_key_var = tk.StringVar(value=os.environ.get("TOUGHSHOTS_ADMIN_KEY", ""))
@@ -571,12 +572,14 @@ class ToughShotsApp(tk.Tk):
         settings.columnconfigure(1, weight=1)
         ttk.Label(settings, text="Tournament name", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Entry(settings, textvariable=self.event_name_var).grid(row=0, column=1, sticky="ew", pady=4)
-        ttk.Label(settings, text="Available lanes", style="FieldLabel.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Spinbox(settings, textvariable=self.lane_count_var, from_=1, to=200, width=8).grid(row=1, column=1, sticky="w", pady=4)
-        ttk.Label(settings, text="Cloud scoring URL", style="FieldLabel.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(settings, textvariable=self.cloud_url_var).grid(row=2, column=1, sticky="ew", pady=4)
-        ttk.Label(settings, text="Cloud admin key", style="FieldLabel.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(settings, textvariable=self.cloud_admin_key_var, show="•").grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Print title", style="FieldLabel.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(settings, textvariable=self.print_title_var).grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Available lanes", style="FieldLabel.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Spinbox(settings, textvariable=self.lane_count_var, from_=1, to=200, width=8).grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Label(settings, text="Cloud scoring URL", style="FieldLabel.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(settings, textvariable=self.cloud_url_var).grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Cloud admin key", style="FieldLabel.TLabel").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(settings, textvariable=self.cloud_admin_key_var, show="•").grid(row=4, column=1, sticky="ew", pady=4)
 
         actions = ttk.Frame(body, style="Card.TFrame")
         actions.grid(row=2, column=0, sticky="w", pady=(4, 10))
@@ -708,6 +711,7 @@ class ToughShotsApp(tk.Tk):
             path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "event_name": self.event_name_var.get().strip(),
+                "print_title": self.print_title_var.get().strip(),
                 "event_date": self.event_date_var.get().strip(),
                 "lane_count": self.lane_count_var.get().strip(),
                 "cloud_url": self.cloud_url_var.get().strip(),
@@ -732,6 +736,7 @@ class ToughShotsApp(tk.Tk):
             return
         mapping = [
             ("event_name", self.event_name_var),
+            ("print_title", self.print_title_var),
             ("event_date", self.event_date_var),
             ("lane_count", self.lane_count_var),
             ("cloud_url", self.cloud_url_var),
@@ -1400,7 +1405,7 @@ class ToughShotsApp(tk.Tk):
                 # Save again so published URL/timestamp are retained.
                 save_manifest(manifest, folder)
                 pdf_path = folder / "lane_scoresheets.pdf"
-                create_scoresheet_pdf(manifest, pdf_path, cloud_url)
+                create_scoresheet_pdf(manifest, pdf_path, cloud_url, print_title=self.print_title_var.get().strip())
                 self.after(0, lambda: self._lane_prepare_complete(manifest_path, assignment_csv, pdf_path, manifest))
             except Exception as exc:
                 self.after(0, lambda err=exc: self._job_failed("Lane scoring setup", err))
@@ -1447,7 +1452,7 @@ class ToughShotsApp(tk.Tk):
                 publish_manifest(manifest, cloud_url, admin_key)
                 save_manifest(manifest, manifest_path.parent)
                 pdf_path = manifest_path.parent / "lane_scoresheets.pdf"
-                create_scoresheet_pdf(manifest, pdf_path, cloud_url)
+                create_scoresheet_pdf(manifest, pdf_path, cloud_url, print_title=self.print_title_var.get().strip())
                 self.after(0, lambda: self._retry_publish_complete(pdf_path))
             except Exception as exc:
                 self.after(0, lambda err=exc: self._job_failed("Lane publish", err))
@@ -1787,7 +1792,7 @@ class ToughShotsApp(tk.Tk):
             if os.name == "nt":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             subprocess.Popen(
-                [sys.executable, str(TOURNAMENT_SCRIPT), str(roster), "--db", str(db_path), "--resume"],
+                [sys.executable, str(TOURNAMENT_SCRIPT), str(roster), "--db", str(db_path), "--resume", "--print-title", self.print_title_var.get().strip()],
                 **kwargs,
             )
             self.status_var.set(f"Reloaded saved tournament from {workspace.name}")
@@ -1815,7 +1820,7 @@ class ToughShotsApp(tk.Tk):
             if os.name == "nt":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             subprocess.Popen(
-                [sys.executable, str(TOURNAMENT_SCRIPT), str(roster)],
+                [sys.executable, str(TOURNAMENT_SCRIPT), str(roster), "--print-title", self.print_title_var.get().strip()],
                 **kwargs,
             )
             self.status_var.set(f"Tournament Manager opened with {roster.name}")

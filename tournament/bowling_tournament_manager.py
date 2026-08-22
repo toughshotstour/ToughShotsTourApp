@@ -48,6 +48,7 @@ import json
 import math
 import os
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -1132,6 +1133,12 @@ class TournamentApp(tk.Tk):
             command=self.open_seed_dialog,
         ).pack(side="left", padx=4)
 
+        ttk.Button(
+            controls,
+            text="Print Qualifying Page",
+            command=self.print_qualifying_page,
+        ).pack(side="left", padx=4)
+
         self.qual_status = ttk.Label(controls, text="")
         self.qual_status.pack(side="right")
 
@@ -1582,6 +1589,12 @@ class TournamentApp(tk.Tk):
             command=self.refresh_match_play,
         ).pack(side="left", padx=4)
 
+        ttk.Button(
+            controls,
+            text="Print Current Round - All Divisions",
+            command=self.print_current_round,
+        ).pack(side="left", padx=4)
+
         self.match_status = ttk.Label(controls, text="")
         self.match_status.pack(side="right")
 
@@ -1841,6 +1854,334 @@ class TournamentApp(tk.Tk):
         self.refresh_summary()
 
     # --------------------------------------------------------
+    # Printing
+    # --------------------------------------------------------
+
+    def _print_output_dir(self):
+        folder = self.db.db_path.parent / "printed_forms"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _shared_print_title(self):
+        return (self.db.get_meta("print_title", "") or "").strip()
+
+    def _send_pdf_to_printer(self, pdf_path):
+        """Send a generated PDF to the default printer, with a safe open-file fallback."""
+        pdf_path = Path(pdf_path).resolve()
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(pdf_path), "print")  # type: ignore[attr-defined]
+                return True
+            if sys.platform == "darwin":
+                subprocess.Popen(["lp", str(pdf_path)])
+                return True
+            subprocess.Popen(["lp", str(pdf_path)])
+            return True
+        except Exception:
+            try:
+                if sys.platform.startswith("win"):
+                    os.startfile(str(pdf_path))  # type: ignore[attr-defined]
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", str(pdf_path)])
+                else:
+                    subprocess.Popen(["xdg-open", str(pdf_path)])
+            except Exception:
+                pass
+            return False
+
+    def print_qualifying_page(self):
+        division = self.qual_division.get()
+        if not division:
+            return
+        if not self.save_all_qualifying_scores():
+            return
+        try:
+            path = self._create_qualifying_pdf(division)
+            sent = self._send_pdf_to_printer(path)
+            messagebox.showinfo(
+                "Qualifying Page",
+                ("Sent to the default printer.\n\n" if sent else "Created PDF. Open it to print.\n\n") + str(path),
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror("Could not print qualifying page", str(exc), parent=self)
+
+    def _create_qualifying_pdf(self, division):
+        try:
+            from reportlab.lib.pagesizes import landscape, letter
+            from reportlab.lib.units import inch
+            from reportlab.pdfgen import canvas
+        except ImportError as exc:
+            raise RuntimeError("Printing requires reportlab. Install requirements.txt.") from exc
+
+        rows = self.db.qualifying_rows(division)
+        games = self.db.qualifying_games
+        safe = "".join(ch if ch.isalnum() else "_" for ch in division).strip("_") or "division"
+        path = self._print_output_dir() / f"qualifying_{safe}.pdf"
+        c = canvas.Canvas(str(path), pagesize=landscape(letter))
+        w, h = landscape(letter)
+        margin = 0.35 * inch
+        title = self._shared_print_title()
+
+        per_page = 18
+        chunks = [rows[i:i + per_page] for i in range(0, len(rows), per_page)] or [[]]
+        for page_i, chunk in enumerate(chunks):
+            y = h - margin
+            if title:
+                c.setFont("Helvetica-Bold", 17)
+                c.drawCentredString(w / 2, y - 2, title)
+                y -= 24
+            c.setFont("Helvetica-Bold", 15)
+            c.drawString(margin, y, "Tough Shots Tour")
+            c.setFont("Helvetica-Bold", 12)
+            c.drawRightString(w - margin, y, f"Qualifying - {division}")
+            y -= 22
+
+            name_w = 2.5 * inch
+            rank_w = 0.45 * inch
+            total_w = 0.70 * inch
+            game_w = (w - 2 * margin - rank_w - name_w - total_w) / max(1, games)
+            xs = [margin, margin + rank_w, margin + rank_w + name_w]
+            for _ in range(games):
+                xs.append(xs[-1] + game_w)
+            xs.append(w - margin)
+            header_h = 0.34 * inch
+            row_h = min(0.34 * inch, (y - margin - header_h) / max(1, len(chunk)))
+            bottom = y - header_h - row_h * len(chunk)
+            c.setLineWidth(1.2)
+            c.rect(margin, bottom, w - 2 * margin, y - bottom)
+            c.setLineWidth(0.7)
+            for x in xs[1:-1]:
+                c.line(x, bottom, x, y)
+            c.line(margin, y - header_h, w - margin, y - header_h)
+            for r in range(1, len(chunk)):
+                yy = y - header_h - r * row_h
+                c.line(margin, yy, w - margin, yy)
+
+            headers = ["#", "Bowler"] + [str(i) for i in range(1, games + 1)] + ["Total"]
+            c.setFont("Helvetica-Bold", 9)
+            for i, label in enumerate(headers):
+                c.drawCentredString((xs[i] + xs[i + 1]) / 2, y - header_h / 2 - 3, label)
+
+            c.setFont("Helvetica", 9)
+            for idx, row in enumerate(chunk):
+                ym = y - header_h - (idx + 0.5) * row_h
+                rank = page_i * per_page + idx + 1
+                c.drawCentredString((xs[0] + xs[1]) / 2, ym - 3, str(rank))
+                c.drawString(xs[1] + 5, ym - 3, f"{row['first_name']} {row['last_name']}")
+                scores = row.get("scores", []) if isinstance(row, dict) else row["scores"]
+                for g in range(games):
+                    val = ""
+                    if g < len(scores) and scores[g] is not None:
+                        val = str(scores[g])
+                    c.drawCentredString((xs[2 + g] + xs[3 + g]) / 2, ym - 3, val)
+                total = row["total"] if row["complete"] else ""
+                c.drawCentredString((xs[-2] + xs[-1]) / 2, ym - 3, str(total))
+            if page_i != len(chunks) - 1:
+                c.showPage()
+        c.save()
+        return path
+
+    def _active_round_index(self, state):
+        """Return the earliest round that still has a real undecided match."""
+        for r_idx, matches in enumerate(state.get("rounds", [])):
+            for match in matches:
+                if match.get("p1") and match.get("p2") and not match.get("winner"):
+                    return r_idx
+        return max(0, len(state.get("rounds", [])) - 1)
+
+    def _current_round_info(self, division):
+        """Return active-round metadata for a division, or None if its bracket is finished/unavailable."""
+        state = self.db.load_bracket(division)
+        if not state:
+            return None
+
+        # Find the earliest round with at least one undecided head-to-head match.
+        r_idx = None
+        for idx, matches in enumerate(state.get("rounds", [])):
+            if any(
+                m.get("p1") and m.get("p2") and not m.get("winner")
+                for m in matches
+            ):
+                r_idx = idx
+                break
+
+        if r_idx is None:
+            return None
+
+        matches = state["rounds"][r_idx]
+        round_size = len(matches) * 2
+        return {
+            "division": division,
+            "state": state,
+            "round_index": r_idx,
+            "matches": matches,
+            "round_size": round_size,
+            "round_name": bracket_round_name(len(matches)),
+        }
+
+    def print_current_round(self):
+        """Print the largest currently-active round across every division.
+
+        If any division is still in a Round of 16, only divisions that are also
+        currently in the Round of 16 are included. Once all remaining active
+        divisions have reached the Round of 8, the next print includes those,
+        and so on.
+        """
+        infos = []
+        for division in self.db.divisions():
+            info = self._current_round_info(division)
+            if info:
+                infos.append(info)
+
+        if not infos:
+            messagebox.showwarning(
+                "No active brackets",
+                "There are no unfinished match-play rounds to print.",
+                parent=self,
+            )
+            return
+
+        largest_round = max(info["round_size"] for info in infos)
+        selected = [info for info in infos if info["round_size"] == largest_round]
+        round_name = selected[0]["round_name"] if selected else f"Round of {largest_round}"
+
+        try:
+            path = self._create_all_divisions_current_round_pdf(selected)
+            sent = self._send_pdf_to_printer(path)
+            divisions = ", ".join(info["division"] for info in selected)
+            messagebox.showinfo(
+                "Bracket Printing",
+                (
+                    ("Sent the current-round bracket sheets to the default printer.\n\n"
+                     if sent else
+                     "Created the bracket PDF. Open it to print.\n\n")
+                    + f"Round: {round_name}\n"
+                    + f"Divisions: {divisions}\n\n"
+                    + str(path)
+                ),
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror("Could not print brackets", str(exc), parent=self)
+
+    def _create_all_divisions_current_round_pdf(self, round_infos):
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.units import inch
+            from reportlab.pdfgen import canvas
+        except ImportError as exc:
+            raise RuntimeError(
+                "Bracket printing requires reportlab. Install requirements.txt."
+            ) from exc
+
+        if not round_infos:
+            raise ValueError("There are no current-round brackets to print.")
+
+        largest_round = max(info["round_size"] for info in round_infos)
+        path = self._print_output_dir() / f"brackets_all_divisions_round_{largest_round}.pdf"
+        c = canvas.Canvas(str(path), pagesize=letter)
+        w, h = letter
+        margin = 0.45 * inch
+        title = self._shared_print_title()
+        first_page = True
+
+        for info in round_infos:
+            division = info["division"]
+            state = info["state"]
+            r_idx = info["round_index"]
+            matches = info["matches"]
+            round_name = info["round_name"]
+
+            # Keep every populated match in the current round on the printed forms.
+            # Four matches = 8 bowlers per sheet; remainder naturally becomes a
+            # 4- or 2-bowler sheet.
+            active = [m for m in matches if m.get("p1") or m.get("p2")]
+            if not active:
+                continue
+
+            chunks = []
+            i = 0
+            while len(active) - i >= 4:
+                chunks.append(active[i:i + 4])
+                i += 4
+            if active[i:]:
+                chunks.append(active[i:])
+
+            seed_by_bowler = {
+                bid: int(seed)
+                for seed, bid in state.get("seed_map", {}).items()
+                if bid
+            }
+
+            for chunk in chunks:
+                if not first_page:
+                    c.showPage()
+                first_page = False
+
+                y = h - margin
+                if title:
+                    c.setFont("Helvetica-Bold", 17)
+                    c.drawCentredString(w / 2, y, title)
+                    y -= 25
+                c.setFont("Helvetica-Bold", 15)
+                c.drawString(margin, y, "Tough Shots Tour")
+                c.setFont("Helvetica-Bold", 12)
+                c.drawRightString(w - margin, y, division)
+                y -= 19
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(margin, y, round_name)
+                bowler_count = min(8, len(chunk) * 2)
+                c.drawRightString(
+                    w - margin, y, f"{bowler_count}-Bowler Bracket Sheet"
+                )
+                y -= 16
+                c.line(margin, y, w - margin, y)
+                y -= 18
+
+                usable_h = y - margin
+                match_h = usable_h / max(1, len(chunk))
+                box_w = w - 2 * margin
+                for m_idx, match in enumerate(chunk):
+                    top = y - m_idx * match_h
+                    bottom = top - match_h + 10
+                    mid = (top + bottom) / 2
+                    c.setLineWidth(1.3)
+                    c.rect(margin, bottom, box_w, match_h - 10)
+                    c.line(margin, mid, w - margin, mid)
+                    for slot, yy in ((1, (top + mid) / 2), (2, (mid + bottom) / 2)):
+                        bid = match.get(f"p{slot}")
+                        seed = seed_by_bowler.get(bid) if bid else None
+                        name = self.db.display_name(bid) if bid else "BYE / Waiting"
+                        prefix = f"#{seed}  " if seed else ""
+                        c.setFont("Helvetica-Bold", 11)
+                        c.drawString(margin + 12, yy - 4, prefix + name)
+                        c.setFont("Helvetica", 9)
+                        c.drawRightString(w - margin - 72, yy - 4, "Score:")
+                        c.rect(w - margin - 64, yy - 11, 50, 20)
+                    winner = match.get("winner")
+                    if winner:
+                        c.setFont("Helvetica-Bold", 8)
+                        c.drawRightString(
+                            w - margin - 10,
+                            bottom + 4,
+                            f"Winner: {self.db.display_name(winner)}",
+                        )
+
+        if first_page:
+            raise ValueError("There are no participants available in the current round yet.")
+
+        c.save()
+        return path
+
+    def _create_current_round_bracket_pdf(self, division, state):
+        """Compatibility helper for callers that still request one division."""
+        info = self._current_round_info(division)
+        if not info:
+            raise ValueError("There is no unfinished current round for this division.")
+        return self._create_all_divisions_current_round_pdf([info])
+
+    # --------------------------------------------------------
     # Summary
     # --------------------------------------------------------
 
@@ -1961,6 +2302,10 @@ class TournamentApp(tk.Tk):
         )
         games_spin.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=6)
 
+        ttk.Label(body, text="Print title:").grid(row=1, column=0, sticky="w", pady=6)
+        print_title_var = tk.StringVar(value=self.db.get_meta("print_title", ""))
+        ttk.Entry(body, textvariable=print_title_var, width=42).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=6)
+
         ttk.Label(
             body,
             text=(
@@ -1970,12 +2315,13 @@ class TournamentApp(tk.Tk):
             ),
             wraplength=430,
         ).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(0, 12)
+            row=2, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
 
         def save():
             try:
                 self.db.qualifying_games = int(games_var.get())
+                self.db.set_meta("print_title", print_title_var.get().strip())
             except ValueError as exc:
                 messagebox.showerror("Invalid Setting", str(exc), parent=win)
                 return
@@ -1987,13 +2333,13 @@ class TournamentApp(tk.Tk):
             body,
             text="Save",
             command=save,
-        ).grid(row=2, column=1, sticky="e", pady=(8, 0))
+        ).grid(row=3, column=1, sticky="e", pady=(8, 0))
 
         ttk.Button(
             body,
             text="Cancel",
             command=win.destroy,
-        ).grid(row=2, column=0, sticky="e", pady=(8, 0))
+        ).grid(row=3, column=0, sticky="e", pady=(8, 0))
 
     def export_results(self):
         folder = filedialog.askdirectory(
@@ -2063,6 +2409,11 @@ def main():
         action="store_true",
         help="Resume an existing tournament database without showing the resume/start-over prompt.",
     )
+    parser.add_argument(
+        "--print-title",
+        default=None,
+        help="Optional shared title printed on qualifying sheets, lane score sheets, and brackets.",
+    )
     args = parser.parse_args()
 
     hidden_root = tk.Tk()
@@ -2092,6 +2443,8 @@ def main():
     db_exists = db_path.exists()
 
     db = TournamentDB(db_path)
+    if args.print_title is not None:
+        db.set_meta("print_title", args.print_title.strip())
 
     try:
         if db_exists and db.roster_loaded():
