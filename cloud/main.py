@@ -374,7 +374,7 @@ h1{margin:0 0 4px;font-size:24px}.sub{color:#607086;margin-bottom:14px}.notice{p
 .login{max-width:420px;margin:12vh auto}.login input{box-sizing:border-box;width:100%;font-size:24px;letter-spacing:5px;text-align:center;padding:12px;border:1px solid #9aa9ba;border-radius:8px}
 .lane-title{font-size:20px;font-weight:900;margin:18px 0 7px;border-bottom:2px solid #26384d;padding-bottom:5px}.bowler{border:1px solid #c3ceda;border-radius:10px;padding:12px;margin:10px 0;background:#fbfcfe}.bowler-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:9px}.name{font-weight:800;font-size:17px}.total{font-weight:800;white-space:nowrap}
 .scoregrid{display:grid;grid-template-columns:repeat(6,minmax(72px,1fr));gap:8px}.game label{display:block;font-size:12px;font-weight:700;color:#5d6c7f;margin-bottom:3px}.game input{box-sizing:border-box;width:100%;font-size:20px;padding:10px 5px;text-align:center;border:1px solid #9aa9ba;border-radius:7px}
-button{background:#1769d2;color:#fff;border:0;border-radius:9px;padding:13px 18px;font-size:17px;font-weight:700;margin-top:14px;width:100%}.who{font-size:13px;color:#52677f;margin-bottom:10px}.logout{float:right;font-size:13px;color:#1769d2;text-decoration:none}
+button{background:#1769d2;color:#fff;border:0;border-radius:9px;padding:13px 18px;font-size:17px;font-weight:700;margin-top:14px;width:100%}.who{font-size:13px;color:#52677f;margin-bottom:10px}.logout{float:right;font-size:13px;color:#1769d2;text-decoration:none}.pairnav{display:flex;justify-content:space-between;gap:10px;margin:12px 0}.navbtn{display:inline-block;padding:10px 12px;border-radius:8px;background:#eef3f8;text-decoration:none;font-weight:700;color:#1769d2}
 @media(max-width:600px){.wrap{padding:8px}.card{padding:10px;border-radius:9px}h1{font-size:21px}.scoregrid{grid-template-columns:repeat(3,1fr)}.game input{font-size:22px;padding:11px 5px}}
 </style>
 """
@@ -410,9 +410,20 @@ def render_pair(token, scorer, *, notice="", warn=False, status=200):
             cards.append(f'<section class="bowler"><div class="bowler-head"><div class="name">{html.escape(proper_name(b["first_name"])+" "+proper_name(b["last_name"]))}</div><div class="total">Total: <span>{total if complete else "-"}</span></div></div><div class="scoregrid">{"".join(fields)}</div></section>')
         sections.append(f'<div class="lane-title">Lane {lane_no}</div>{"".join(cards)}')
     label=f"Lane {lane_nos[0]}" if len(lane_nos)==1 else f"Lanes {lane_nos[0]}-{lane_nos[1]}"
+    with db() as conn:
+        prev_pair=conn.execute("SELECT token,lane_a,lane_b FROM lane_pair_sessions WHERE tournament_id=? AND pair_no<? ORDER BY pair_no DESC LIMIT 1",(pair["tournament_id"],pair["pair_no"])).fetchone()
+        next_pair=conn.execute("SELECT token,lane_a,lane_b FROM lane_pair_sessions WHERE tournament_id=? AND pair_no>? ORDER BY pair_no ASC LIMIT 1",(pair["tournament_id"],pair["pair_no"])).fetchone()
+    nav=[]
+    if prev_pair:
+        pl=f"Lane {prev_pair['lane_a']}" if prev_pair['lane_b'] is None else f"Lanes {prev_pair['lane_a']}-{prev_pair['lane_b']}"
+        nav.append(f'<a class="navbtn" href="/s/{html.escape(prev_pair["token"])}">← {pl}</a>')
+    if next_pair:
+        nl=f"Lane {next_pair['lane_a']}" if next_pair['lane_b'] is None else f"Lanes {next_pair['lane_a']}-{next_pair['lane_b']}"
+        nav.append(f'<a class="navbtn" href="/s/{html.escape(next_pair["token"])}">{nl} →</a>')
+    nav_html='<div class="pairnav">'+''.join(nav)+'</div>' if nav else ''
     notice_html=f'<div class="notice {"warn" if warn else ""}">{html.escape(notice)}</div>' if notice else ""
     script="""<script>document.querySelectorAll('.bowler').forEach(function(card){const inputs=[...card.querySelectorAll('input[type=number]')],total=card.querySelector('.total span');function update(){const vals=inputs.map(i=>i.value.trim());total.textContent=vals.every(v=>v!=='')?vals.reduce((a,v)=>a+Number(v),0):'-'}inputs.forEach(i=>i.addEventListener('input',update));update();});</script>"""
-    page=f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">{CSS}<title>{label} Scores</title></head><body><div class="wrap"><div class="card"><a class="logout" href="/logout?next=/s/{html.escape(token)}">Sign out</a><h1>{html.escape(pair['name'])} - {label}</h1><div class="who">Scorer: <strong>{html.escape(scorer['name'])}</strong> &nbsp;|&nbsp; Scores remain editable after saving.</div>{notice_html}<form method="post" action="/s/{html.escape(token)}" onsubmit="return confirm('Save these scores?')"><input type="hidden" name="version" value="{pair['version']}">{''.join(sections)}<button type="submit">Save Scores</button></form></div></div>{script}</body></html>'''
+    page=f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">{CSS}<title>{label} Scores</title></head><body><div class="wrap"><div class="card"><a class="logout" href="/logout?next=/s/{html.escape(token)}">Sign out</a><h1>{html.escape(pair['name'])} - {label}</h1><div class="who">Scorer: <strong>{html.escape(scorer['name'])}</strong> &nbsp;|&nbsp; Scores remain editable after saving.</div>{nav_html}{notice_html}<form method="post" action="/s/{html.escape(token)}" onsubmit="return confirm('Save these scores?')"><input type="hidden" name="version" value="{pair['version']}">{''.join(sections)}<button type="submit">Save Scores</button></form></div></div>{script}</body></html>'''
     return HTMLResponse(page,status_code=status)
 
 
@@ -586,10 +597,27 @@ def init_portal_db():
             PRIMARY KEY(tournament_id, group_name, rank, first_name, last_name),
             FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS public_qualifying_settings (
+            tournament_id TEXT NOT NULL,
+            division TEXT NOT NULL,
+            cut_size INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(tournament_id, division),
+            FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS public_match_play (
+            tournament_id TEXT NOT NULL,
+            division TEXT NOT NULL,
+            bracket_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(tournament_id, division),
+            FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
+        );
         """)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(public_tournaments)").fetchall()}
         if "jr_gold_updated_at" not in cols:
             conn.execute("ALTER TABLE public_tournaments ADD COLUMN jr_gold_updated_at TEXT")
+        if "match_play_updated_at" not in cols:
+            conn.execute("ALTER TABLE public_tournaments ADD COLUMN match_play_updated_at TEXT")
         # Backfill the now-finalized BOY formula for any tournaments archived by an older build.
         perf = conn.execute("SELECT tournament_id,division,first_name,last_name,qualifying_rank,match_wins,finish_label,boy_points FROM tournament_performance").fetchall()
         sizes = {}
@@ -776,6 +804,7 @@ async def api_publish_qualifying(request: Request, x_admin_key: str | None = Hea
     name = str(payload.get("tournament_name", "Tough Shots Tournament")).strip()
     event_date = str(payload.get("event_date", "")).strip() or datetime.now().date().isoformat()
     divisions = payload.get("divisions") or {}
+    cuts = payload.get("cuts") or {}
     if not tournament_id:
         raise HTTPException(status_code=400, detail="Tournament ID is required.")
     unmatched = 0
@@ -784,9 +813,11 @@ async def api_publish_qualifying(request: Request, x_admin_key: str | None = Hea
         conn.execute("INSERT INTO public_tournaments(tournament_id,name,event_date,status,qualifying_updated_at) VALUES(?,?,?,?,?) ON CONFLICT(tournament_id) DO UPDATE SET name=excluded.name,event_date=excluded.event_date,status='LIVE',qualifying_updated_at=excluded.qualifying_updated_at",
                      (tournament_id, name, event_date, "LIVE", now_iso()))
         conn.execute("DELETE FROM public_qualifying WHERE tournament_id=?", (tournament_id,))
+        conn.execute("DELETE FROM public_qualifying_settings WHERE tournament_id=?", (tournament_id,))
         for division, rows in divisions.items():
             if division not in DIVISIONS:
                 continue
+            conn.execute("INSERT INTO public_qualifying_settings(tournament_id,division,cut_size) VALUES(?,?,?)", (tournament_id,division,max(0,int(cuts.get(division,0) or 0))))
             for row in rows:
                 permanent = _resolve_permanent(conn, row.get("first_name", ""), row.get("last_name", ""), row.get("birthdate"))
                 if not permanent:
@@ -797,6 +828,47 @@ async def api_publish_qualifying(request: Request, x_admin_key: str | None = Hea
                              (tournament_id, division, permanent["bowler_id"] if permanent else None, proper_name(row.get("first_name", "")), proper_name(row.get("last_name", "")), int(row.get("rank", 0)), __import__('json').dumps(scores), int(row.get("total", 0)), row.get("average"), max(valid_scores) if valid_scores else None, 1 if row.get("complete") else 0))
         conn.commit()
     return {"ok": True, "tournament_id": tournament_id, "unmatched_bowlers": unmatched}
+
+
+@app.post("/api/public/match-play")
+async def api_publish_match_play(request: Request, x_admin_key: str | None = Header(default=None)):
+    require_admin(x_admin_key)
+    payload=await request.json()
+    tournament_id=str(payload.get("tournament_id","")).strip()
+    name=str(payload.get("tournament_name","Tough Shots Tournament")).strip()
+    event_date=str(payload.get("event_date","")).strip() or datetime.now().date().isoformat()
+    divisions=payload.get("divisions") or {}
+    if not tournament_id:
+        raise HTTPException(status_code=400,detail="Tournament ID is required.")
+    import json as _json
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO public_tournaments(tournament_id,name,event_date,status,match_play_updated_at) VALUES(?,?,?,?,?) ON CONFLICT(tournament_id) DO UPDATE SET name=excluded.name,event_date=excluded.event_date,status='LIVE',match_play_updated_at=excluded.match_play_updated_at",(tournament_id,name,event_date,"LIVE",now_iso()))
+        conn.execute("DELETE FROM public_match_play WHERE tournament_id=?",(tournament_id,))
+        published=0
+        for division,spec in divisions.items():
+            if division in DIVISIONS and (spec or {}).get("rounds"):
+                conn.execute("INSERT INTO public_match_play(tournament_id,division,bracket_json,updated_at) VALUES(?,?,?,?)",(tournament_id,division,_json.dumps(spec),now_iso()))
+                published += 1
+        conn.commit()
+    return {"ok":True,"tournament_id":tournament_id,"divisions":published}
+
+
+@app.delete("/api/public/current")
+def api_clear_current(x_admin_key: str | None = Header(default=None)):
+    require_admin(x_admin_key)
+    with db() as conn:
+        ids={r["tournament_id"] for r in conn.execute("SELECT DISTINCT tournament_id FROM public_qualifying UNION SELECT DISTINCT tournament_id FROM public_jr_gold UNION SELECT DISTINCT tournament_id FROM public_match_play").fetchall()}
+        conn.execute("DELETE FROM public_qualifying")
+        conn.execute("DELETE FROM public_qualifying_settings")
+        conn.execute("DELETE FROM public_jr_gold")
+        conn.execute("DELETE FROM public_jr_gold_groups")
+        conn.execute("DELETE FROM public_match_play")
+        conn.execute("UPDATE public_tournaments SET qualifying_updated_at=NULL,jr_gold_updated_at=NULL,match_play_updated_at=NULL")
+        # Keep archived tournament rows/performance history; discard empty live shells.
+        conn.execute("DELETE FROM public_tournaments WHERE archived_at IS NULL AND qualifying_updated_at IS NULL AND jr_gold_updated_at IS NULL AND match_play_updated_at IS NULL")
+        conn.commit()
+    return {"ok":True,"cleared_tournaments":len(ids)}
 
 
 @app.post("/api/public/archive")
@@ -910,19 +982,39 @@ def _division_from_slug(slug):
     return None
 
 
+def _latest_current_tournament(conn):
+    return conn.execute(
+        """SELECT * FROM public_tournaments
+           WHERE qualifying_updated_at IS NOT NULL OR jr_gold_updated_at IS NOT NULL OR match_play_updated_at IS NOT NULL
+           ORDER BY COALESCE(match_play_updated_at,jr_gold_updated_at,qualifying_updated_at,event_date) DESC LIMIT 1"""
+    ).fetchone()
+
+
 @app.get("/", response_class=HTMLResponse)
 def public_home():
     with db() as conn:
-        live = conn.execute("SELECT * FROM public_tournaments WHERE qualifying_updated_at IS NOT NULL ORDER BY event_date DESC, qualifying_updated_at DESC LIMIT 1").fetchone()
         archive_count = conn.execute("SELECT COUNT(*) AS n FROM public_tournaments WHERE archived_at IS NOT NULL").fetchone()["n"]
-    body = f"<h2>Welcome</h2><div class='grid'><a class='tile' href='/standings'><h2>Qualifying Standings</h2></a><a class='tile' href='/bowler-of-the-year'><h2>Bowler of the Year</h2></a><a class='tile' href='/jr-gold'><h2>Jr. Gold Qualifying</h2></a><a class='tile' href='/archive'><h2>Tournament Archive</h2><p>{archive_count} tournament(s) archived.</p></a></div>"
+    body = f"<div class='grid'><a class='tile' href='/current'><h2>Current Tournament</h2></a><a class='tile' href='/bowler-of-the-year'><h2>Bowler of the Year</h2></a><a class='tile' href='/archive'><h2>Tournament Archive</h2><p>{archive_count} tournament(s) archived.</p></a></div>"
     return _page("Tough Shots", body)
+
+
+@app.get("/current", response_class=HTMLResponse)
+def current_tournament_index():
+    with db() as conn:
+        t=_latest_current_tournament(conn)
+    event="" if not t else f"<p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>"
+    tiles=("<div class='grid'>"
+           "<a class='tile' href='/standings'><h2>Qualifying</h2></a>"
+           "<a class='tile' href='/jr-gold'><h2>Jr. Gold Qualifying</h2></a>"
+           "<a class='tile' href='/match-play'><h2>Match Play</h2></a>"
+           "</div>")
+    return _page("Current Tournament", f"<p><a href='/'>← Home</a></p><h2>Current Tournament</h2>{event}{tiles}")
 
 
 @app.get("/standings", response_class=HTMLResponse)
 def standings_index():
     tiles = "".join(f"<a class='tile' href='/standings/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
-    return _page("Qualifying Standings", f"<p><a href='/'>← Home</a></p><h2>Qualifying Standings</h2><div class='grid'>{tiles}</div>")
+    return _page("Qualifying Standings", f"<p><a href='/current'>← Current Tournament</a></p><h2>Qualifying Standings</h2><div class='grid'>{tiles}</div>")
 
 
 @app.get("/standings/{division_slug}", response_class=HTMLResponse)
@@ -931,20 +1023,70 @@ def standings_division(division_slug: str):
     if not division:
         raise HTTPException(status_code=404, detail="Division not found")
     with db() as conn:
-        t = conn.execute("SELECT * FROM public_tournaments WHERE qualifying_updated_at IS NOT NULL ORDER BY event_date DESC, qualifying_updated_at DESC LIMIT 1").fetchone()
+        t = conn.execute("SELECT * FROM public_tournaments WHERE qualifying_updated_at IS NOT NULL ORDER BY qualifying_updated_at DESC LIMIT 1").fetchone()
         rows = [] if not t else conn.execute("SELECT * FROM public_qualifying WHERE tournament_id=? AND division=? ORDER BY rank", (t["tournament_id"], division)).fetchall()
+        setting = None if not t else conn.execute("SELECT cut_size FROM public_qualifying_settings WHERE tournament_id=? AND division=?",(t["tournament_id"],division)).fetchone()
     if not t:
         return _page(division, f"<p><a href='/standings'>← Divisions</a></p><h2>{html.escape(division)}</h2><p>No qualifying standings have been published yet.</p>")
-    trs = []
+    cut=int(setting["cut_size"] or 0) if setting else 0
+    trs=[]; high_game=-1; high_game_names=[]; high3=-1; high3_names=[]
     import json as _json
     for r in rows:
         scores = _json.loads(r["scores_json"])
+        valid=[int(x) for x in scores if x is not None]
         game_text = " / ".join("—" if x is None else str(x) for x in scores)
         avg = "—" if r["average"] is None else f"{r['average']:.2f}"
-        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        boundary=" style='border-bottom:4px solid #1769d2'" if cut and int(r["rank"])==cut else ""
+        name=f"{proper_name(r['first_name'])} {proper_name(r['last_name'])}"
+        trs.append(f"<tr{boundary}><td class='rank'>{r['rank']}</td><td>{html.escape(name)}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        if valid:
+            hg=max(valid)
+            if hg>high_game: high_game=hg; high_game_names=[name]
+            elif hg==high_game: high_game_names.append(name)
+        if len(scores)>=3 and all(x is not None for x in scores[:3]):
+            h3=sum(int(x) for x in scores[:3])
+            if h3>high3: high3=h3; high3_names=[name]
+            elif h3==high3: high3_names.append(name)
     table = "<p>No bowlers in this division.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>" + "".join(trs) + "</tbody></table></div>"
-    body = f"<p><a href='/standings'>← Divisions</a></p><h2>{html.escape(division)}</h2><p><strong>{html.escape(t['name'])}</strong> <span class='status'>{html.escape(t['status'])}</span><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{table}"
+    stats=""
+    if rows:
+        hg_text="—" if high_game<0 else f"{high_game} — {', '.join(high_game_names)}"
+        h3_text="—" if high3<0 else f"{high3} — {', '.join(high3_names)}"
+        stats=f"<div class='grid stats'><div class='tile'><h2>High Game</h2><p>{html.escape(hg_text)}</p></div><div class='tile'><h2>High 3-Game Set</h2><p>{html.escape(h3_text)}</p></div></div>"
+    cut_note=f"Cut line: top {cut}." if cut else "No cut line."
+    body = f"<p><a href='/standings'>← Divisions</a></p><h2>{html.escape(division)}</h2><p><strong>{html.escape(t['name'])}</strong> <span class='status'>{html.escape(t['status'])}</span><br><span class='muted'>{html.escape(t['event_date'])} · {html.escape(cut_note)}</span></p>{table}{stats}"
     return _page(f"{division} Standings", body)
+
+
+@app.get("/match-play", response_class=HTMLResponse)
+def match_play_index():
+    tiles="".join(f"<a class='tile' href='/match-play/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
+    return _page("Match Play",f"<p><a href='/current'>← Current Tournament</a></p><h2>Match Play</h2><div class='grid'>{tiles}</div>")
+
+
+@app.get("/match-play/{division_slug}", response_class=HTMLResponse)
+def match_play_division(division_slug: str):
+    division=_division_from_slug(division_slug)
+    if not division: raise HTTPException(status_code=404,detail="Division not found")
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE match_play_updated_at IS NOT NULL ORDER BY match_play_updated_at DESC LIMIT 1").fetchone()
+        row=None if not t else conn.execute("SELECT bracket_json FROM public_match_play WHERE tournament_id=? AND division=?",(t["tournament_id"],division)).fetchone()
+    if not t or not row:
+        return _page(f"{division} Match Play",f"<p><a href='/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2><p>No bracket has been published yet.</p>")
+    import json as _json
+    spec=_json.loads(row["bracket_json"]); rounds=spec.get("rounds") or []
+    parts=[f"<p><a href='/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>"]
+    for rnd in rounds:
+        matches=[]
+        for m in rnd.get("matches") or []:
+            p1=(m.get("p1") or {}).get("name") or "TBD"; p2=(m.get("p2") or {}).get("name") or "TBD"
+            s1="—" if m.get("score1") is None else str(m.get("score1")); s2="—" if m.get("score2") is None else str(m.get("score2"))
+            winner=m.get("winner")
+            p1_class=" class='rank'" if winner and (m.get("p1") or {}).get("bowler_id")==winner else ""
+            p2_class=" class='rank'" if winner and (m.get("p2") or {}).get("bowler_id")==winner else ""
+            matches.append(f"<div class='tile'><div{p1_class}>{html.escape(p1)} <strong>{s1}</strong></div><div{p2_class}>{html.escape(p2)} <strong>{s2}</strong></div></div>")
+        parts.append(f"<h3>{html.escape(rnd.get('name') or 'Round')}</h3><div class='grid'>{''.join(matches) or '<p>No matches.</p>'}</div>")
+    return _page(f"{division} Match Play",''.join(parts))
 
 
 @app.get("/bowler-of-the-year", response_class=HTMLResponse)
@@ -1007,7 +1149,7 @@ def jr_gold_index():
     )
     status = "" if t else "<p>No Jr. Gold standings have been published yet.</p>"
     event = "" if not t else f"<p><strong>{html.escape(t['name'])}</strong><br>{html.escape(t['event_date'])}</p>"
-    return _page("Jr. Gold Qualifying",f"<p><a href='/'>← Home</a></p><h2>Jr. Gold Qualifying</h2>{event}{status}<div class='grid'>{tiles}</div>")
+    return _page("Jr. Gold Qualifying",f"<p><a href='/current'>← Current Tournament</a></p><h2>Jr. Gold Qualifying</h2>{event}{status}<div class='grid'>{tiles}</div>")
 
 
 @app.get("/jr-gold/{division_slug}", response_class=HTMLResponse)

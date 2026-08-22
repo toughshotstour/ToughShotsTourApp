@@ -4,8 +4,8 @@ A guided desktop application for tournament preparation, division creation, bowl
 
 ## Main workflow
 
-1. **Payment Check** - reconcile registrations against completed Square payments.
-2. **Local Master Bowler Database** - demographic exports are used only to create/update this database; all tournament workflows read demographic information from the database itself.
+1. **Local Master Bowler Database** - demographic exports are used only to create/update this database; all tournament workflows read demographic information from the database itself.
+2. **Tournament Prep / Payment Check** - reconcile registrations against completed Square payments and check current entries against the master database.
 3. **Division Builder** - create the tournament division rosters.
 4. **Tournament Manager** - six-game qualifying, cuts, seeding, match play, brackets, autosave, and exports.
 5. **Lanes + Mobile** - randomly balance all bowlers across available lanes, publish lane-pair mobile scoring pages, manage individual scorer PINs, generate QR-coded paper score sheets, and sync phone-entered qualifying scores back to the Tournament Manager database.
@@ -52,9 +52,9 @@ The included cloud service is a FastAPI application in `cloud/`, and `render.yam
 
 ## Lane assignment behavior
 
-Lane assignment balances the **lane-pair scorecards first**, so pair totals differ by no more than one bowler. It then keeps bowlers from the same division together as much as possible. Divisions may share a pair when needed to preserve even scorecard sizes, but bowlers from the same division stay grouped together instead of being interleaved.
+Lane assignment balances the **lane-pair scorecards first**, so pair totals differ by no more than one bowler unless an explicit same-pair group makes that impossible. It keeps bowlers from the same division together as much as practical. Use **Lane Groups** to assign a shared group ID to bowlers who must remain on the same pair, then use **Review / Move Bowlers** for individual lane changes before generating the score sheets.
 
-Preparing lane scoring creates:
+Preparing lane assignment creates the manifest/CSV and publishes mobile scoring. After reviewing the draw, **Generate Score Sheets** creates the PDF:
 
 ```text
 TournamentWorkspace/
@@ -137,7 +137,7 @@ The Tournament Manager stores its local SQLite database next to `all_divisions.c
 
 ## Permanent bowlers and public results
 
-The Render service now also hosts a public Tough Shots landing page with qualifying standings for all seven divisions, Bowler-of-the-Year pages, and a historical tournament archive. The desktop application's **6 Bowlers + Results** page manages the private permanent bowler database, Jr. Gold status, one-click qualifying publication, and end-of-tournament archive/season uploads. See `docs/PUBLIC_RESULTS_SETUP.md` for the workflow.
+The Render service now hosts a public Tough Shots landing page with **Current Tournament**, Bowler-of-the-Year, and Tournament Archive. Current Tournament contains separate seven-division Qualifying, Jr. Gold Qualifying, and Match Play pages. The desktop application's **6 Bowlers + Results** page manages the private permanent bowler database, Jr. Gold status, one-click qualifying publication, and end-of-tournament archive/season uploads. See `docs/PUBLIC_RESULTS_SETUP.md` for the workflow.
 
 ### Added results features
 - Automatic Bowler-of-the-Year points: reverse qualifying placement points + 5 per match win + champion/runner-up bonuses.
@@ -150,3 +150,8 @@ The Render service now also hosts a public Tough Shots landing page with qualify
 The demographic form is only an import/update source. In **2 Bowler Database**, import a new demographic export only when needed. The authoritative source is `local_demographics.sqlite3`; tournament entry checks, roster enrichment, division placement, Jr. Gold information, and permanent-bowler sync read directly from that database. `demographic_master.csv` is retained only as a convenient human-readable export.
 
 After a tournament has been published to the cloud archive, use **6 Bowlers + Results → Reset for Next Tournament**. The button moves the current payment, division, Tournament Manager database, and lane-scoring files into a timestamped `completed_tournaments` folder and clears the active tournament selections. It deliberately preserves `local_demographics.sqlite3`, `demographic_master.csv`, `imported_files`, cloud permanent bowlers/Jr. Gold states, scorer PINs, and the public archive.
+
+
+## Current tournament publishing
+
+The **Bowlers + Results** page can independently push Qualifying, Jr. Gold, and Match Play to the public website. Regular qualifying cut sizes default to the largest power-of-two bracket that does not exceed half the division field (for example, 15 bowlers → cut 4 and 16 bowlers → cut 8). Public qualifying pages show the cut line plus the division high game and high first-three-game set. **Clear Current Tournament from Website** removes live qualifying/Jr. Gold/match-play information without deleting archived tournaments or Bowler-of-the-Year history.

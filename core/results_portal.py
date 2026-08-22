@@ -14,6 +14,18 @@ from core.lane_scoring import _json_request, normalize_base_url, proper_name
 DIVISIONS = ["U12 Mixed","U14 Boys","U14 Girls","U16 Boys","U16 Girls","U18 Boys","U18 Girls"]
 
 
+def automatic_cut_size(field_size):
+    """Largest power of two not exceeding half the field (15->4, 16->8)."""
+    n = max(0, int(field_size))
+    half = n // 2
+    if half < 2:
+        return min(n, 2) if n >= 2 else 0
+    cut = 1
+    while cut * 2 <= half:
+        cut *= 2
+    return cut
+
+
 def _pick_header(headers, exact=(), contains=()):
     lookup = {h.casefold().strip(): h for h in headers}
     for name in exact:
@@ -112,9 +124,10 @@ def qualifying_payload(roster_path, manifest_path, tournament_name, event_date=N
         if not tdb.roster_loaded():
             tdb.import_roster(Path(roster_path))
         divisions={}
+        cuts={}
         for division in DIVISIONS:
             if division not in tdb.divisions():
-                divisions[division]=[]
+                divisions[division]=[]; cuts[division]=0
                 continue
             out=[]
             for r in tdb.qualifying_rows(division):
@@ -122,10 +135,11 @@ def qualifying_payload(roster_path, manifest_path, tournament_name, event_date=N
                 item["first_name"]=proper_name(item["first_name"]); item["last_name"]=proper_name(item["last_name"])
                 out.append(item)
             divisions[division]=out
+            # Use the Tournament Manager value, which defaults to the automatic rule.
+            cuts[division]=tdb.cut_size(division) if len(out) >= 2 else 0
     finally:
         tdb.close()
-    return {"tournament_id":_current_tournament_id(manifest_path,db_path),"tournament_name":tournament_name.strip() or "Tough Shots Tournament","event_date":event_date or date.today().isoformat(),"divisions":divisions}
-
+    return {"tournament_id":_current_tournament_id(manifest_path,db_path),"tournament_name":tournament_name.strip() or "Tough Shots Tournament","event_date":event_date or date.today().isoformat(),"divisions":divisions,"cuts":cuts}
 
 def publish_qualifying(base_url, admin_key, roster_path, manifest_path, tournament_name, event_date=None):
     payload=qualifying_payload(roster_path,manifest_path,tournament_name,event_date)
@@ -252,6 +266,45 @@ def jr_gold_payload(base_url, admin_key, roster_path, manifest_path, tournament_
 def publish_jr_gold(base_url, admin_key, roster_path, manifest_path, tournament_name, event_date=None):
     payload=jr_gold_payload(base_url,admin_key,roster_path,manifest_path,tournament_name,event_date)
     return _json_request(normalize_base_url(base_url)+"/api/public/jr-gold",method="POST",payload=payload,admin_key=admin_key.strip())
+
+
+def match_play_payload(roster_path, manifest_path, tournament_name, event_date=None):
+    from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path, bracket_round_name
+    db_path=resolve_database_path(Path(roster_path)); tdb=TournamentDB(db_path)
+    try:
+        if not tdb.roster_loaded(): tdb.import_roster(Path(roster_path))
+        divisions={}
+        for division in DIVISIONS:
+            state=tdb.load_bracket(division) if division in tdb.divisions() else None
+            if not state:
+                divisions[division]={"rounds":[],"cut_size":0,"bracket_size":0}
+                continue
+            rounds=[]
+            for matches in state.get("rounds",[]):
+                out_matches=[]
+                for m in matches:
+                    def player(bid):
+                        if not bid: return None
+                        b=tdb.bowler(bid)
+                        return {"bowler_id":bid,"name":proper_name(f"{b['first_name']} {b['last_name']}") if b else bid}
+                    out_matches.append({
+                        "p1": player(m.get("p1")), "p2": player(m.get("p2")),
+                        "score1": m.get("score1"), "score2": m.get("score2"),
+                        "winner": m.get("winner"),
+                    })
+                rounds.append({"name":bracket_round_name(len(matches)),"matches":out_matches})
+            divisions[division]={"rounds":rounds,"cut_size":state.get("cut_size",0),"bracket_size":state.get("bracket_size",0)}
+    finally:
+        tdb.close()
+    return {"tournament_id":_current_tournament_id(manifest_path,db_path),"tournament_name":tournament_name.strip() or "Tough Shots Tournament","event_date":event_date or date.today().isoformat(),"divisions":divisions}
+
+
+def publish_match_play(base_url, admin_key, roster_path, manifest_path, tournament_name, event_date=None):
+    return _json_request(normalize_base_url(base_url)+"/api/public/match-play",method="POST",payload=match_play_payload(roster_path,manifest_path,tournament_name,event_date),admin_key=admin_key.strip())
+
+
+def clear_current_tournament(base_url, admin_key):
+    return _json_request(normalize_base_url(base_url)+"/api/public/current", method="DELETE", admin_key=admin_key.strip())
 
 
 def archive_payload(roster_path, manifest_path, tournament_name, event_date=None):

@@ -391,12 +391,48 @@ def require_database(workspace):
     """Return the local master database path after confirming it has bowler records."""
     if count_rows(workspace) < 1:
         raise ValueError(
-            "The local bowler database is empty. Open Step 2 — Demographics and import a demographic form once before preparing this tournament."
+            "The local bowler database is empty. Open Step 1 — Bowler Database and import a demographic form once before preparing this tournament."
         )
     return database_path(workspace)
 
 
 def require_snapshot(workspace):
     if count_rows(workspace) < 1:
-        raise ValueError("The local demographic database is empty. Open Step 2 — Demographics and import a demographic form once before preparing this tournament.")
+        raise ValueError("The local demographic database is empty. Open Step 1 — Bowler Database and import a demographic form once before preparing this tournament.")
     return export_snapshot(workspace)
+
+
+def missing_from_registration(workspace, registration_csv):
+    """Return tournament registration rows that do not have a master DB match."""
+    registration_csv = Path(registration_csv)
+    with registration_csv.open('r', newline='', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        first_col = _pick_header(headers, ["Bowlers First Name", "Bowler First Name", "First Name"])
+        last_col = _pick_header(headers, ["Bowlers Last Name", "Bowler Last Name", "Last Name"])
+        birth_col = _pick_header(headers, ["Bowlers Date of Birth", "Date of birth", "Date of Birth", "DOB"])
+        if not first_col or not last_col:
+            raise ValueError("Tournament entries need recognizable first- and last-name columns.")
+        entries=list(reader)
+    conn=_connect(workspace)
+    try:
+        master=conn.execute("SELECT first_name,last_name,birthdate FROM demographics").fetchall()
+    finally:
+        conn.close()
+    by_name={}
+    for r in master:
+        by_name.setdefault((_norm(r['first_name']),_norm(r['last_name'])),[]).append(r)
+    missing=[]
+    for row_no,row in enumerate(entries,start=2):
+        first=proper_name(row.get(first_col)); last=proper_name(row.get(last_col))
+        if not first or not last: continue
+        matches=by_name.get((_norm(first),_norm(last)),[])
+        birth=(row.get(birth_col) or '').strip() if birth_col else ''
+        if birth and matches:
+            try: birth=normalize_birthdate(birth)
+            except Exception: pass
+            exact=[r for r in matches if str(r['birthdate']).strip()==birth]
+            if exact: matches=exact
+        if not matches:
+            missing.append({"row":row_no,"first_name":first,"last_name":last,"birthdate":birth})
+    return missing

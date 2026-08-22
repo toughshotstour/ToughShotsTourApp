@@ -64,6 +64,18 @@ MAX_QUALIFYING_GAMES = 20
 MAX_BRACKET_SIZE = 64
 
 
+def automatic_cut_size(field_size):
+    """Largest power of two not exceeding half the field (15 -> 4, 16 -> 8)."""
+    n=max(0,int(field_size))
+    half=n//2
+    if half < 2:
+        return min(n,2) if n>=2 else 0
+    cut=1
+    while cut*2 <= half:
+        cut*=2
+    return min(cut, MAX_BRACKET_SIZE)
+
+
 # ============================================================
 # Database / tournament model
 # ============================================================
@@ -238,9 +250,7 @@ class TournamentDB:
                 (division,),
             ).fetchone()["n"]
 
-            cut = min(DEFAULT_CUT_SIZE, count)
-            if cut < 2 and count >= 2:
-                cut = 2
+            cut = automatic_cut_size(count)
 
             cur.execute(
                 """
@@ -326,6 +336,16 @@ class TournamentDB:
             ).fetchall()
         }
 
+    def ensure_automatic_cuts(self):
+        """Apply the default qualifying cut rule to divisions without a bracket."""
+        for division in self.divisions():
+            if self.load_bracket(division):
+                continue
+            cut=automatic_cut_size(len(self.bowlers(division)))
+            if cut >= 2:
+                self.conn.execute("INSERT INTO division_settings(division,cut_size) VALUES(?,?) ON CONFLICT(division) DO UPDATE SET cut_size=excluded.cut_size",(division,cut))
+        self.conn.commit()
+
     def cut_size(self, division):
         row = self.conn.execute(
             "SELECT cut_size FROM division_settings WHERE division = ?",
@@ -336,7 +356,7 @@ class TournamentDB:
             return int(row["cut_size"])
 
         count = len(self.bowlers(division))
-        return min(DEFAULT_CUT_SIZE, count)
+        return automatic_cut_size(count)
 
     def set_cut_size(self, division, cut_size):
         cut_size = int(cut_size)
@@ -1252,34 +1272,43 @@ class TournamentApp(tk.Tk):
         if manifest_var.get(): load_lane()
 
     def open_jr_gold_settings(self):
-        win=tk.Toplevel(self); win.title("Jr. Gold Qualifier Settings"); win.geometry("560x590"); win.resizable(False,False)
-        outer=ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
+        win=tk.Toplevel(self); win.title("Jr. Gold Qualifier Settings"); win.geometry("610x600"); win.resizable(False,False)
+        outer=ttk.Frame(win,padding=16); outer.pack(fill="both",expand=True)
         ttk.Label(outer,text="Jr. Gold Qualifier",font=("",16,"bold")).pack(anchor="w")
-        ttk.Label(outer,text="These settings are separate from the regular match-play cut. Merge switches affect only Jr. Gold standings.",wraplength=510,justify="left").pack(anchor="w",pady=(3,12))
+        ttk.Label(outer,text="Choose which age groups combine Boys + Girls, then set the qualifying cut for each Jr. Gold group.",wraplength=560,justify="left").pack(anchor="w",pady=(3,12))
         current=self.db.jr_gold_settings()
         merge_vars={age:tk.BooleanVar(value=current["merges"].get(age,False)) for age in ("U14","U16","U18")}
-        merge_box=ttk.LabelFrame(outer,text="Optional boys / girls merges",padding=10); merge_box.pack(fill="x",pady=(0,12))
+        # Keep draft values even while merge toggles change the visible set of groups.
+        draft_cuts={k:str(v) for k,v in current.get("cuts",{}).items()}
+        merge_box=ttk.LabelFrame(outer,text="Division grouping",padding=10); merge_box.pack(fill="x",pady=(0,12))
         for age in ("U14","U16","U18"):
-            ttk.Checkbutton(merge_box,text=f"Merge {age} Boys + Girls for Jr. Gold",variable=merge_vars[age]).pack(anchor="w",pady=3)
-        cuts_box=ttk.LabelFrame(outer,text="Jr. Gold cut sizes",padding=10); cuts_box.pack(fill="both",expand=True)
+            ttk.Checkbutton(merge_box,text=f"Combine {age} Boys + Girls",variable=merge_vars[age]).pack(anchor="w",pady=4)
+        cuts_box=ttk.LabelFrame(outer,text="Cut lines",padding=10); cuts_box.pack(fill="both",expand=True)
         cut_vars={}
-        def rebuild_cuts():
+        def remember_visible():
+            for group,var in list(cut_vars.items()): draft_cuts[group]=var.get()
+        def rebuild_cuts(*_):
+            remember_visible()
             for child in cuts_box.winfo_children(): child.destroy()
-            settings={"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":current.get("cuts",{})}
+            cut_vars.clear()
+            settings={"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":draft_cuts}
             for r,group in enumerate(self.db.jr_gold_group_names(settings)):
-                ttk.Label(cuts_box,text=group).grid(row=r,column=0,sticky="w",padx=(0,12),pady=4)
-                var=tk.StringVar(value=str(current.get("cuts",{}).get(group,0)))
-                ttk.Spinbox(cuts_box,textvariable=var,from_=0,to=200,width=7).grid(row=r,column=1,sticky="w",pady=4)
-                cut_vars[group]=var
-        for v in merge_vars.values(): v.trace_add("write",lambda *_:rebuild_cuts())
+                ttk.Label(cuts_box,text=group,font=("",10,"bold")).grid(row=r,column=0,sticky="w",padx=(0,14),pady=6)
+                var=tk.StringVar(value=draft_cuts.get(group,"0")); cut_vars[group]=var
+                ttk.Spinbox(cuts_box,textvariable=var,from_=0,to=200,width=8).grid(row=r,column=1,sticky="w",pady=6)
+        for v in merge_vars.values(): v.trace_add("write",rebuild_cuts)
         rebuild_cuts()
         def save():
             try:
-                settings={"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":{g:int(v.get() or 0) for g,v in cut_vars.items()}}
-                self.db.set_jr_gold_settings(settings)
-                messagebox.showinfo("Jr. Gold Settings","Jr. Gold merge and cut settings saved.",parent=win); win.destroy()
+                remember_visible()
+                visible=self.db.jr_gold_group_names({"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":draft_cuts})
+                cuts={g:int(draft_cuts.get(g,"0") or 0) for g in visible}
+                self.db.set_jr_gold_settings({"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":cuts})
+                messagebox.showinfo("Jr. Gold Settings","Jr. Gold settings saved.",parent=win); win.destroy()
             except Exception as exc: messagebox.showerror("Jr. Gold Settings",str(exc),parent=win)
-        ttk.Button(outer,text="Save Jr. Gold Settings",command=save).pack(anchor="e",pady=(12,0))
+        bottom=ttk.Frame(outer); bottom.pack(fill="x",pady=(12,0))
+        ttk.Button(bottom,text="Cancel",command=win.destroy).pack(side="right")
+        ttk.Button(bottom,text="Save Settings",command=save).pack(side="right",padx=8)
 
     def refresh_qualifying(self):
         division = self.qual_division.get()
@@ -2484,6 +2513,7 @@ def main():
         hidden_root.destroy()
         return
 
+    db.ensure_automatic_cuts()
     hidden_root.destroy()
 
     app = TournamentApp(db, roster_path)

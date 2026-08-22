@@ -28,7 +28,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from core.lane_scoring import (
     assign_lanes, create_scoresheet_pdf, fetch_cloud_scores, load_manifest,
     publish_manifest, save_manifest, list_scorers, create_scorer,
-    reset_scorer_pin, delete_scorer,
+    reset_scorer_pin, delete_scorer, move_bowler_to_lane, roster_rows,
 )
 from core.import_archive import archive_imports
 from core.local_demographics import (
@@ -36,12 +36,13 @@ from core.local_demographics import (
     require_database as require_local_bowler_database,
     count_rows as local_demographic_count,
     list_local_bowlers, add_local_bowler, update_local_bowler, delete_local_bowler,
-    set_local_jr_gold_by_bowler_ids, DIVISIONS as LOCAL_DIVISIONS,
+    set_local_jr_gold_by_bowler_ids, DIVISIONS as LOCAL_DIVISIONS, missing_from_registration,
 )
 from core.results_portal import (
     import_bowlers as portal_import_bowlers, list_bowlers as portal_list_bowlers,
     set_jr_gold as portal_set_jr_gold, publish_qualifying as portal_publish_qualifying,
     publish_jr_gold as portal_publish_jr_gold, archive_tournament as portal_archive_tournament,
+    publish_match_play as portal_publish_match_play, clear_current_tournament as portal_clear_current_tournament,
 )
 
 try:
@@ -161,7 +162,7 @@ class ToughShotsApp(tk.Tk):
         self.nav_buttons = {}
         self._build_shell()
         self._build_pages()
-        self.show_page("overview")
+        self.show_page("demographics")
         self._sync_pipeline_paths()
         self._load_workspace_state()
         self.after(250, self._detect_saved_tournament)
@@ -299,9 +300,9 @@ class ToughShotsApp(tk.Tk):
         ).pack(anchor="w", padx=6, pady=(1, 24))
 
         nav_items = [
-            ("overview", "Overview"),
-            ("payments", "1  Payment Check"),
-            ("demographics", "2  Bowler Database"),
+            ("demographics", "1  Bowler Database"),
+            ("overview", "2  Tournament Prep"),
+            ("payments", "Payment Check"),
             ("divisions", "3  Divisions"),
             ("tournament", "4  Tournament"),
             ("lanes", "5  Lanes + Mobile"),
@@ -369,7 +370,7 @@ class ToughShotsApp(tk.Tk):
             self.page_host,
             "Tournament Prep",
             "Choose the registration and Square files, then run the full preparation pipeline. "
-            "Demographics come from the reusable local demographic database maintained in Step 2.",
+            "Demographics come from the reusable local master bowler database maintained in Step 1.",
         )
         body = page.body
 
@@ -459,7 +460,7 @@ class ToughShotsApp(tk.Tk):
         page = WorkflowPage(
             self.page_host,
             "Local Master Bowler Database",
-            "Import a demographic form only to create or update the master bowler database. Tournament prep, entry checks, divisions, Jr. Gold, and cloud sync use the database itself.",
+            "Start here. Import demographic forms only when the master bowler database needs new or updated information; the rest of the tournament uses this database directly.",
         )
         body = page.body
         FilePicker(
@@ -467,21 +468,28 @@ class ToughShotsApp(tk.Tk):
             label="Optional demographic form CSV to import",
             variable=self.demographics_var,
             choose_command=lambda: self.choose_csv(self.demographics_var),
-            hint="Choose a fresh demographic export when you need to add/update bowlers. You do not need to select it again for every tournament.",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
+            hint="Use a fresh demographic export to add or update bowlers. It is not needed again during tournament prep.",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        FilePicker(
+            body,
+            label="Tournament entries CSV (for missing-demographic check)",
+            variable=self.registration_var,
+            choose_command=lambda: self.choose_csv(self.registration_var),
+            hint="Optional here. Use it to see which current tournament entries are not yet in the master database.",
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 14))
         FilePicker(
             body,
             label="Workspace folder",
             variable=self.workspace_var,
             choose_command=self.choose_workspace,
             directory=True,
-            hint="The reusable local_demographics.sqlite3 database is stored here and is not removed by tournament reset.",
-        ).grid(row=1, column=0, sticky="ew", pady=(0, 18))
+            hint="The reusable local_demographics.sqlite3 database stays here between tournaments.",
+        ).grid(row=2, column=0, sticky="ew", pady=(0, 18))
         actions = ttk.Frame(body, style="Card.TFrame")
-        actions.grid(row=2, column=0, sticky="w")
-        ttk.Button(actions, text="Update Master Database from Demographic Form", command=self.update_local_demographics, style="Primary.TButton").pack(side="left")
+        actions.grid(row=3, column=0, sticky="w")
+        ttk.Button(actions, text="Update Master Database", command=self.update_local_demographics, style="Primary.TButton").pack(side="left")
         ttk.Button(actions, text="Manage Local Bowlers", command=self.manage_local_bowlers, style="Secondary.TButton").pack(side="left", padx=8)
-        ttk.Button(actions, text="Check Entries Against Master Database", command=self.run_demographics, style="Secondary.TButton").pack(side="left")
+        ttk.Button(actions, text="Show Missing Demographics", command=self.show_missing_demographics, style="Secondary.TButton").pack(side="left")
         return page
 
     def _build_divisions_page(self):
@@ -496,7 +504,7 @@ class ToughShotsApp(tk.Tk):
             label="Paid + demographic check CSV",
             variable=self.division_input_var,
             choose_command=lambda: self.choose_csv(self.division_input_var),
-            hint="Defaults to the paid_demographic_check.csv created by Step 2.",
+            hint="Defaults to the paid_demographic_check.csv created during tournament prep.",
         ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
         FilePicker(
             body,
@@ -555,7 +563,7 @@ class ToughShotsApp(tk.Tk):
         page = WorkflowPage(
             self.page_host,
             "Lane Assignment + Mobile Scoring",
-            "Randomly balance bowlers evenly across lane-pair scorecards, publish one QR scoring page per pair, and create compact six-game score sheets.",
+            "Build balanced lane-pair assignments, optionally keep selected bowlers together, review or move bowlers before printing, and publish mobile scoring.",
         )
         body = page.body
 
@@ -564,7 +572,7 @@ class ToughShotsApp(tk.Tk):
             label="Tournament roster (all_divisions.csv)",
             variable=self.tournament_roster_var,
             choose_command=lambda: self.choose_csv(self.tournament_roster_var),
-            hint="Bowler names are pulled from this roster. Pair sizes are balanced globally, with divisions kept together as much as possible.",
+            hint="Assignments balance pair sizes first, keep divisions together when practical, and honor any lane-group IDs you set.",
         ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         settings = ttk.Frame(body, style="Card.TFrame")
@@ -582,14 +590,20 @@ class ToughShotsApp(tk.Tk):
         ttk.Entry(settings, textvariable=self.cloud_admin_key_var, show="•").grid(row=4, column=1, sticky="ew", pady=4)
 
         actions = ttk.Frame(body, style="Card.TFrame")
-        actions.grid(row=2, column=0, sticky="w", pady=(4, 10))
-        ttk.Button(actions, text="Prepare Lane Scoring", command=self.prepare_lane_scoring, style="Primary.TButton").pack(side="left")
-        ttk.Button(actions, text="Manage Scorer PINs", command=self.manage_scorer_pins, style="Secondary.TButton").pack(side="left", padx=8)
-        ttk.Button(actions, text="Retry Publish", command=self.retry_lane_publish, style="Secondary.TButton").pack(side="left")
-        ttk.Button(actions, text="Sync Mobile Scores", command=self.sync_mobile_scores, style="Secondary.TButton").pack(side="left", padx=(8, 0))
+        actions.grid(row=2, column=0, sticky="ew", pady=(4, 10))
+        ttk.Button(actions, text="Lane Groups", command=self.manage_lane_groups, style="Secondary.TButton").pack(side="left")
+        ttk.Button(actions, text="Prepare Lane Assignment", command=self.prepare_lane_scoring, style="Primary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions, text="Review / Move Bowlers", command=self.edit_lane_assignments, style="Secondary.TButton").pack(side="left")
+        ttk.Button(actions, text="Generate Score Sheets", command=self.generate_lane_scoresheets, style="Secondary.TButton").pack(side="left", padx=8)
+
+        actions2=ttk.Frame(body,style="Card.TFrame")
+        actions2.grid(row=3,column=0,sticky="w",pady=(0,10))
+        ttk.Button(actions2, text="Manage Scorer PINs", command=self.manage_scorer_pins, style="Secondary.TButton").pack(side="left")
+        ttk.Button(actions2, text="Retry Publish", command=self.retry_lane_publish, style="Secondary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions2, text="Sync Mobile Scores", command=self.sync_mobile_scores, style="Secondary.TButton").pack(side="left")
 
         outputs = ttk.Frame(body, style="Card.TFrame")
-        outputs.grid(row=3, column=0, sticky="ew", pady=(4, 8))
+        outputs.grid(row=4, column=0, sticky="ew", pady=(4, 8))
         outputs.columnconfigure(1, weight=1)
         ttk.Label(outputs, text="Assignment", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Entry(outputs, textvariable=self.lane_manifest_var, state="readonly").grid(row=0, column=1, sticky="ew", pady=3)
@@ -602,7 +616,7 @@ class ToughShotsApp(tk.Tk):
             text="Auto-sync cloud scores into the Tournament Manager database every 15 seconds",
             variable=self.auto_sync_var,
             command=self._auto_sync_changed,
-        ).grid(row=4, column=0, sticky="w", pady=(8, 4))
+        ).grid(row=5, column=0, sticky="w", pady=(8, 4))
         return page
 
     def _build_results_page(self):
@@ -626,15 +640,19 @@ class ToughShotsApp(tk.Tk):
         row2=ttk.Frame(body,style="Card.TFrame"); row2.grid(row=4,column=0,sticky="w",pady=(0,12))
         ttk.Button(row2,text="Push Current Qualifying Standings",command=self.push_public_qualifying,style="Primary.TButton").pack(side="left")
         ttk.Button(row2,text="Push Jr. Gold Standings",command=self.push_jr_gold_qualifying,style="Secondary.TButton").pack(side="left",padx=8)
-        ttk.Button(row2,text="Archive Tournament + Update BOY Data",command=self.archive_public_tournament,style="Secondary.TButton").pack(side="left",padx=(0,8))
+        ttk.Button(row2,text="Push Match Play Brackets",command=self.push_public_match_play,style="Secondary.TButton").pack(side="left",padx=(0,8))
         ttk.Button(row2,text="Open Public Site",command=self.open_public_site,style="Secondary.TButton").pack(side="left")
 
-        ttk.Label(body, text="Next tournament", style="Section.TLabel").grid(row=5,column=0,sticky="w",pady=(8,8))
-        row3=ttk.Frame(body,style="Card.TFrame"); row3.grid(row=6,column=0,sticky="w",pady=(0,12))
+        row2b=ttk.Frame(body,style="Card.TFrame"); row2b.grid(row=5,column=0,sticky="w",pady=(0,12))
+        ttk.Button(row2b,text="Archive Tournament + Update BOY Data",command=self.archive_public_tournament,style="Primary.TButton").pack(side="left")
+        ttk.Button(row2b,text="Clear Current Tournament from Website",command=self.clear_current_tournament_website,style="Secondary.TButton").pack(side="left",padx=8)
+
+        ttk.Label(body, text="Next tournament", style="Section.TLabel").grid(row=6,column=0,sticky="w",pady=(8,8))
+        row3=ttk.Frame(body,style="Card.TFrame"); row3.grid(row=7,column=0,sticky="w",pady=(0,12))
         ttk.Button(row3,text="Reset for Next Tournament",command=self.reset_for_next_tournament,style="Primary.TButton").pack(side="left")
         ttk.Label(body,text=(
             "When the tournament is finished, archive the results first. Then use Reset for Next Tournament to clear the active tournament while keeping your saved bowler information and past results."
-        ),style="CardText.TLabel",wraplength=760,justify="left").grid(row=7,column=0,sticky="w",pady=(8,0))
+        ),style="CardText.TLabel",wraplength=760,justify="left").grid(row=8,column=0,sticky="w",pady=(8,0))
         return page
 
     # ------------------------------------------------------------------
@@ -898,7 +916,11 @@ class ToughShotsApp(tk.Tk):
         field(5, "USBC ID", usbc_var)
         field(6, "Bowler ID", bowler_id_var, readonly=True)
         ttk.Label(form, text="Bowler ID stays fixed once generated so past results remain linked.", style="Hint.TLabel", wraplength=340, justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 5))
-        field(8, "Jr. Gold status", jg_var, "combo", ["", "JG", "Q"])
+        ttk.Label(form, text="Jr. Gold status").grid(row=8, column=0, sticky="w", padx=(0, 8), pady=5)
+        jg_controls=ttk.Frame(form); jg_controls.grid(row=8,column=1,sticky="w",pady=5)
+        ttk.Radiobutton(jg_controls,text="Not trying",variable=jg_var,value="").pack(side="left")
+        ttk.Radiobutton(jg_controls,text="JG — Trying",variable=jg_var,value="JG").pack(side="left",padx=8)
+        ttk.Radiobutton(jg_controls,text="Q — Qualified",variable=jg_var,value="Q").pack(side="left")
         field(9, "Email", email_var)
 
         status = tk.StringVar(value="")
@@ -997,6 +1019,28 @@ class ToughShotsApp(tk.Tk):
         search_var.trace_add("write", lambda *_: refresh())
         search_entry.bind("<Escape>", lambda _e: search_var.set(""))
         refresh()
+
+    def show_missing_demographics(self):
+        registration=Path(self.registration_var.get()).expanduser()
+        if not registration.is_file():
+            messagebox.showerror("Tournament entries required", "Choose the tournament registration CSV first.", parent=self)
+            return
+        try:
+            missing=missing_from_registration(Path(self.workspace_var.get()).expanduser(), registration)
+        except Exception as exc:
+            messagebox.showerror("Missing demographics", str(exc), parent=self)
+            return
+        win=tk.Toplevel(self); win.title("Tournament Entries Missing from Master Database"); win.geometry("760x520")
+        outer=ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
+        ttk.Label(outer,text=f"Missing demographic records: {len(missing)}",font=("Segoe UI",15,"bold")).pack(anchor="w",pady=(0,8))
+        cols=("row","name","birthdate")
+        tree=ttk.Treeview(outer,columns=cols,show="headings")
+        for c,label,w in (("row","Entry Row",90),("name","Bowler",360),("birthdate","Birthdate",160)):
+            tree.heading(c,text=label); tree.column(c,width=w,anchor="w")
+        tree.pack(fill="both",expand=True)
+        for item in missing:
+            tree.insert("","end",values=(item.get("row"),f"{item.get('first_name','')} {item.get('last_name','')}",item.get("birthdate") or ""))
+        ttk.Label(outer,text="These bowlers are in the tournament entries but could not be matched to the local master bowler database.",wraplength=700,justify="left").pack(anchor="w",pady=(8,0))
 
     def run_demographics(self):
         if not self._require_files(("Payment status CSV", self.payment_input_var.get())):
@@ -1349,87 +1393,138 @@ class ToughShotsApp(tk.Tk):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
+    def _lane_groups_path(self):
+        return self._lane_folder() / "lane_groups.json"
+
+    def _load_lane_groups(self):
+        path=self._lane_groups_path()
+        if not path.is_file(): return {}
+        try: return json.loads(path.read_text(encoding="utf-8"))
+        except Exception: return {}
+
+    def manage_lane_groups(self):
+        roster=Path(self.tournament_roster_var.get()).expanduser()
+        if not roster.is_file():
+            messagebox.showerror("Roster required","Choose the tournament roster first.",parent=self); return
+        try: rows=roster_rows(roster)
+        except Exception as exc: messagebox.showerror("Lane Groups",str(exc),parent=self); return
+        groups=self._load_lane_groups()
+        win=tk.Toplevel(self); win.title("Lane Pair Groups"); win.geometry("850x600"); win.minsize(700,450)
+        outer=ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
+        ttk.Label(outer,text="Keep Bowlers on the Same Lane Pair",font=("Segoe UI",16,"bold")).pack(anchor="w")
+        ttk.Label(outer,text="Select one or more bowlers, type any group ID (for example FAMILY1), and apply it. Bowlers sharing an ID will stay on the same pair during automatic assignment.",wraplength=800,justify="left").pack(anchor="w",pady=(3,10))
+        cols=("name","division","group")
+        tree=ttk.Treeview(outer,columns=cols,show="headings",selectmode="extended")
+        for c,label,w in (("name","Bowler",320),("division","Division",160),("group","Group ID",180)):
+            tree.heading(c,text=label); tree.column(c,width=w,anchor="w")
+        tree.pack(fill="both",expand=True)
+        for b in rows:
+            tree.insert("","end",iid=str(b["bowler_id"]),values=(f"{b['first_name']} {b['last_name']}",b['division'],groups.get(str(b['bowler_id']),"")))
+        controls=ttk.Frame(outer); controls.pack(fill="x",pady=(10,0))
+        gid=tk.StringVar()
+        ttk.Label(controls,text="Group ID:").pack(side="left")
+        ttk.Entry(controls,textvariable=gid,width=18).pack(side="left",padx=6)
+        def apply_group(clear=False):
+            selected=tree.selection()
+            if not selected:
+                messagebox.showinfo("Select bowlers","Select one or more bowlers first.",parent=win); return
+            value="" if clear else gid.get().strip()
+            if not clear and not value:
+                messagebox.showinfo("Group ID","Type a group ID first.",parent=win); return
+            for bid in selected:
+                if value: groups[str(bid)]=value
+                else: groups.pop(str(bid),None)
+                vals=list(tree.item(bid,"values")); vals[2]=value; tree.item(bid,values=vals)
+            self._lane_groups_path().write_text(json.dumps(groups,indent=2),encoding="utf-8")
+        ttk.Button(controls,text="Apply to Selected",command=apply_group,style="Primary.TButton").pack(side="left")
+        ttk.Button(controls,text="Clear Group",command=lambda:apply_group(True),style="Secondary.TButton").pack(side="left",padx=8)
+        ttk.Button(controls,text="Done",command=win.destroy,style="Secondary.TButton").pack(side="right")
+
     def prepare_lane_scoring(self):
         roster = Path(self.tournament_roster_var.get()).expanduser()
         if not roster.is_file():
             messagebox.showerror("Roster not found", "Choose an existing all_divisions.csv file first.", parent=self)
             return
-        if self._busy:
-            return
+        if self._busy: return
         try:
-            lane_count = int(self.lane_count_var.get())
-            cloud_url = self.cloud_url_var.get().strip()
-            admin_key = self.cloud_admin_key_var.get().strip()
-            event_name = self.event_name_var.get().strip() or "Tough Shots Tournament"
-            if not cloud_url or not admin_key:
-                raise ValueError("Enter both the cloud scoring URL and cloud admin key.")
+            lane_count=int(self.lane_count_var.get()); cloud_url=self.cloud_url_var.get().strip(); admin_key=self.cloud_admin_key_var.get().strip()
+            event_name=self.event_name_var.get().strip() or "Tough Shots Tournament"
+            if not cloud_url or not admin_key: raise ValueError("Enter both the cloud scoring URL and cloud admin key.")
         except Exception as exc:
-            messagebox.showerror("Lane setup", str(exc), parent=self)
-            return
-
-        self._save_workspace_state()
-        folder = self._lane_folder()
-        existing_manifest = folder / "lane_manifest.json"
-        existing_id = None
+            messagebox.showerror("Lane setup",str(exc),parent=self); return
+        self._save_workspace_state(); folder=self._lane_folder(); existing_manifest=folder/"lane_manifest.json"; existing_id=None
         if existing_manifest.is_file():
-            if not messagebox.askyesno(
-                "Create a New Lane Draw?",
-                "This will replace the current lane assignment, invalidate the old QR score sheets, and clear cloud qualifying scores for this tournament. Continue?",
-                parent=self,
-            ):
-                return
-            try:
-                existing_id = load_manifest(existing_manifest).get("tournament_id")
-            except Exception:
-                existing_id = None
-
-        if not self._archive_inputs(
-            "lane_assignment",
-            ("tournament_roster", roster),
-        ):
-            return
-
-        self._busy = True
-        self.status_var.set("Randomizing lanes, publishing QR pages, and building score sheets…")
-
+            if not messagebox.askyesno("Create a New Lane Draw?","This replaces the current assignment and republishes the mobile scoring pages. Continue?",parent=self): return
+            try: existing_id=load_manifest(existing_manifest).get("tournament_id")
+            except Exception: pass
+        if not self._archive_inputs("lane_assignment",("tournament_roster",roster)): return
+        self._busy=True; self.status_var.set("Building balanced lane assignment and publishing mobile scoring…")
+        groups=self._load_lane_groups()
         def worker():
             try:
-                manifest = assign_lanes(
-                    roster,
-                    lane_count,
-                    tournament_name=event_name,
-                    tournament_id=existing_id,
-                )
-                manifest_path, assignment_csv = save_manifest(manifest, folder)
-                publish_manifest(manifest, cloud_url, admin_key)
-                # Save again so published URL/timestamp are retained.
-                save_manifest(manifest, folder)
-                pdf_path = folder / "lane_scoresheets.pdf"
-                create_scoresheet_pdf(manifest, pdf_path, cloud_url, print_title=self.print_title_var.get().strip())
-                self.after(0, lambda: self._lane_prepare_complete(manifest_path, assignment_csv, pdf_path, manifest))
-            except Exception as exc:
-                self.after(0, lambda err=exc: self._job_failed("Lane scoring setup", err))
+                manifest=assign_lanes(roster,lane_count,tournament_name=event_name,tournament_id=existing_id,group_assignments=groups)
+                manifest_path,assignment_csv=save_manifest(manifest,folder)
+                publish_manifest(manifest,cloud_url,admin_key); save_manifest(manifest,folder)
+                self.after(0,lambda:self._lane_prepare_complete(manifest_path,assignment_csv,manifest))
+            except Exception as exc: self.after(0,lambda err=exc:self._job_failed("Lane scoring setup",err))
+        threading.Thread(target=worker,daemon=True).start()
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _lane_prepare_complete(self, manifest_path, assignment_csv, manifest):
+        self._busy=False; self.lane_manifest_var.set(str(manifest_path)); self.lane_pdf_var.set("")
+        counts=[len(x["bowlers"]) for x in manifest["lanes"]]; by_lane={int(x["lane_no"]):len(x["bowlers"]) for x in manifest["lanes"]}
+        pair_counts=[sum(by_lane.get(int(n),0) for n in pair.get("lane_nos",[])) for pair in manifest.get("lane_pairs",[])]
+        self.status_var.set(f"Lane assignment ready — review it before generating score sheets")
+        messagebox.showinfo("Lane Assignment Ready",f"Assignment published successfully.\n\nBowlers: {sum(counts)}\nScorecards: {len(pair_counts)}\nBowlers per scorecard: {min(pair_counts)}-{max(pair_counts)}\n\nReview or move bowlers now, then click Generate Score Sheets.",parent=self)
 
-    def _lane_prepare_complete(self, manifest_path, assignment_csv, pdf_path, manifest):
-        self._busy = False
-        self.lane_manifest_var.set(str(manifest_path))
-        self.lane_pdf_var.set(str(pdf_path))
-        counts = [len(lane["bowlers"]) for lane in manifest["lanes"]]
-        by_lane = {int(lane["lane_no"]): len(lane["bowlers"]) for lane in manifest["lanes"]}
-        pair_counts = [sum(by_lane.get(int(n), 0) for n in pair.get("lane_nos", [])) for pair in manifest.get("lane_pairs", [])]
-        self.status_var.set(
-            f"Lane scoring ready — {sum(counts)} bowlers across {len(pair_counts)} scorecards ({min(pair_counts)}-{max(pair_counts)} per pair)"
-        )
-        messagebox.showinfo(
-            "Lane Scoring Ready",
-            f"Random lane assignment published successfully.\n\n"
-            f"Bowlers: {sum(counts)}\nLanes: {len(counts)}\nScorecards/lane pairs: {len(pair_counts)}\n"
-            f"Bowlers per scorecard: {min(pair_counts)}-{max(pair_counts)}\n\n"
-            f"Assignments: {assignment_csv}\nScore sheets: {pdf_path}",
-            parent=self,
-        )
+    def edit_lane_assignments(self):
+        path=Path(self.lane_manifest_var.get()).expanduser()
+        if not path.is_file(): messagebox.showerror("No assignment","Prepare a lane assignment first.",parent=self); return
+        manifest=load_manifest(path)
+        win=tk.Toplevel(self); win.title("Review / Move Lane Assignments"); win.geometry("900x620"); win.minsize(760,480)
+        outer=ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
+        ttk.Label(outer,text="Review Lane Assignments",font=("Segoe UI",16,"bold")).pack(anchor="w")
+        cols=("lane","name","division")
+        tree=ttk.Treeview(outer,columns=cols,show="headings",selectmode="browse")
+        for c,label,w in (("lane","Lane",80),("name","Bowler",340),("division","Division",180)):
+            tree.heading(c,text=label); tree.column(c,width=w,anchor="w")
+        tree.pack(fill="both",expand=True,pady=(10,8))
+        def refresh(select=None):
+            tree.delete(*tree.get_children())
+            for lane in manifest.get("lanes",[]):
+                for b in lane.get("bowlers",[]):
+                    tree.insert("","end",iid=str(b["bowler_id"]),values=(lane["lane_no"],f"{b['first_name']} {b['last_name']}",b['division']))
+            if select and tree.exists(str(select)): tree.selection_set(str(select)); tree.see(str(select))
+        controls=ttk.Frame(outer); controls.pack(fill="x")
+        lane_var=tk.StringVar(value="1")
+        ttk.Label(controls,text="Move selected bowler to lane:").pack(side="left")
+        ttk.Spinbox(controls,textvariable=lane_var,from_=1,to=max(int(x["lane_no"]) for x in manifest["lanes"]),width=7).pack(side="left",padx=6)
+        def move():
+            sel=tree.selection()
+            if not sel: messagebox.showinfo("Select bowler","Select a bowler first.",parent=win); return
+            try: move_bowler_to_lane(manifest,sel[0],int(lane_var.get())); refresh(sel[0])
+            except Exception as exc: messagebox.showerror("Move bowler",str(exc),parent=win)
+        ttk.Button(controls,text="Move",command=move,style="Primary.TButton").pack(side="left")
+        def save_publish():
+            try:
+                save_manifest(manifest,path.parent)
+                publish_manifest(manifest,self.cloud_url_var.get().strip(),self.cloud_admin_key_var.get().strip())
+                save_manifest(manifest,path.parent)
+                self.lane_pdf_var.set("")
+                messagebox.showinfo("Assignments Saved","Changes were saved and republished. Generate score sheets when you are ready.",parent=win)
+            except Exception as exc: messagebox.showerror("Save assignments",str(exc),parent=win)
+        ttk.Button(controls,text="Save + Republish",command=save_publish,style="Secondary.TButton").pack(side="left",padx=8)
+        ttk.Button(controls,text="Close",command=win.destroy,style="Secondary.TButton").pack(side="right")
+        refresh()
+
+    def generate_lane_scoresheets(self):
+        path=Path(self.lane_manifest_var.get()).expanduser()
+        if not path.is_file(): messagebox.showerror("No assignment","Prepare a lane assignment first.",parent=self); return
+        try:
+            pdf=path.parent/"lane_scoresheets.pdf"
+            create_scoresheet_pdf(load_manifest(path),pdf,self.cloud_url_var.get().strip(),print_title=self.print_title_var.get().strip())
+            self.lane_pdf_var.set(str(pdf)); self._save_workspace_state()
+            messagebox.showinfo("Score Sheets Ready",f"Created:\n{pdf}",parent=self)
+        except Exception as exc: messagebox.showerror("Score sheets",str(exc),parent=self)
 
     def retry_lane_publish(self):
         manifest_path = Path(self.lane_manifest_var.get()).expanduser()
@@ -1568,36 +1663,44 @@ class ToughShotsApp(tk.Tk):
     def manage_permanent_bowlers(self):
         try: url,key=self._portal_credentials()
         except Exception as exc: messagebox.showerror("Cloud settings",str(exc),parent=self); return
-        win=tk.Toplevel(self); win.title("Private Permanent Bowler Database"); win.geometry("900x560"); win.minsize(760,420)
+        win=tk.Toplevel(self); win.title("Private Permanent Bowler Database"); win.geometry("930x600"); win.minsize(780,440)
         outer=ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
         ttk.Label(outer,text="Permanent Bowlers",font=("Segoe UI",16,"bold")).pack(anchor="w")
-        ttk.Label(outer,text="This list is private. Select a bowler and set the Jr. Gold state to blank, JG (trying to qualify), or Q (already qualified).",wraplength=820,justify="left").pack(anchor="w",pady=(3,10))
+        ttk.Label(outer,text="Select a bowler, choose their Jr. Gold status, and click Apply. This list remains private.",wraplength=850,justify="left").pack(anchor="w",pady=(3,10))
         cols=("id","name","gender","birthdate","division","jg")
         tree=ttk.Treeview(outer,columns=cols,show="headings",selectmode="browse")
-        widths=(125,210,75,100,110,65)
-        labels=("Bowler ID","Bowler","Gender","Birthdate","Division","JG State")
+        widths=(125,220,75,100,120,85); labels=("Bowler ID","Bowler","Gender","Birthdate","Division","JG Status")
         for c,label,w in zip(cols,labels,widths): tree.heading(c,text=label); tree.column(c,width=w,anchor="w")
         tree.pack(fill="both",expand=True)
         status=tk.StringVar(value="Loading…"); ttk.Label(outer,textvariable=status).pack(anchor="w",pady=(7,4))
         controls=ttk.Frame(outer); controls.pack(fill="x")
-        def refresh():
+        choice=tk.StringVar(value="Blank — Not trying")
+        choices=["Blank — Not trying","JG — Trying to qualify","Q — Qualified"]
+        ttk.Label(controls,text="Jr. Gold status:").pack(side="left")
+        combo=ttk.Combobox(controls,textvariable=choice,values=choices,state="readonly",width=24); combo.pack(side="left",padx=6)
+        def refresh(select=None):
             try:
-                data=portal_list_bowlers(url,key)
-                tree.delete(*tree.get_children())
+                data=portal_list_bowlers(url,key); tree.delete(*tree.get_children())
                 for b in data.get("bowlers",[]):
                     tree.insert("","end",iid=b["bowler_id"],values=(b["bowler_id"],f"{b['first_name']} {b['last_name']}",b["gender"],b["birthdate"],b["division"],b["jr_gold_state"] or "—"))
+                if select and tree.exists(select): tree.selection_set(select); tree.see(select)
                 status.set(f"{len(data.get('bowlers',[]))} permanent bowlers")
             except Exception as exc: status.set(str(exc)); messagebox.showerror("Could not load bowlers",str(exc),parent=win)
-        def set_state(state):
+        def on_select(_=None):
+            sel=tree.selection()
+            if not sel: return
+            state=tree.item(sel[0],"values")[5]
+            choice.set("JG — Trying to qualify" if state=="JG" else ("Q — Qualified" if state=="Q" else "Blank — Not trying"))
+        def apply():
             sel=tree.selection()
             if not sel: messagebox.showinfo("Select bowler","Select a bowler first.",parent=win); return
-            try: portal_set_jr_gold(url,key,sel[0],state); refresh()
+            state="JG" if choice.get().startswith("JG") else ("Q" if choice.get().startswith("Q") else "")
+            try:
+                portal_set_jr_gold(url,key,sel[0],state); refresh(sel[0]); status.set("Jr. Gold status updated.")
             except Exception as exc: messagebox.showerror("Could not update status",str(exc),parent=win)
-        # Native tk buttons avoid theme-specific blank-label issues seen on some Windows installs.
-        tk.Button(controls,text="Set Blank",command=lambda:set_state(""),padx=12,pady=6).pack(side="left")
-        tk.Button(controls,text="Set JG",command=lambda:set_state("JG"),padx=12,pady=6).pack(side="left",padx=6)
-        tk.Button(controls,text="Set Q",command=lambda:set_state("Q"),padx=12,pady=6).pack(side="left")
-        tk.Button(controls,text="Refresh",command=refresh,padx=12,pady=6).pack(side="right")
+        ttk.Button(controls,text="Apply Status",command=apply,style="Primary.TButton").pack(side="left")
+        ttk.Button(controls,text="Refresh",command=refresh,style="Secondary.TButton").pack(side="right")
+        tree.bind("<<TreeviewSelect>>",on_select)
         refresh()
 
     def _portal_roster_ready(self):
@@ -1639,6 +1742,33 @@ class ToughShotsApp(tk.Tk):
         self.status_var.set("Jr. Gold standings published")
         messagebox.showinfo("Jr. Gold Published",f"Published {result.get('published_bowlers',0)} eligible bowlers across {result.get('groups',0)} Jr. Gold group(s).",parent=self)
 
+    def push_public_match_play(self):
+        try:
+            url,key=self._portal_credentials(); roster,manifest=self._portal_roster_ready()
+        except Exception as exc:
+            messagebox.showerror("Cannot publish match play",str(exc),parent=self); return
+        self.status_var.set("Publishing match-play brackets…")
+        def worker():
+            try:
+                result=portal_publish_match_play(url,key,roster,manifest,self.event_name_var.get(),self.event_date_var.get().strip())
+                self.after(0,lambda:self._match_play_publish_done(result))
+            except Exception as exc:
+                self.after(0,lambda e=exc:self._job_failed("Match-play publish",e))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def _match_play_publish_done(self,result):
+        self.status_var.set("Match-play brackets published")
+        messagebox.showinfo("Match Play Published",f"Published brackets for {result.get('divisions',0)} division(s).",parent=self)
+
+    def clear_current_tournament_website(self):
+        if not messagebox.askyesno("Clear Current Tournament?","Remove Qualifying, Jr. Gold Qualifying, and Match Play information from the Current Tournament section of the public website? Archived tournaments and Bowler of the Year standings will stay intact.",parent=self): return
+        try: url,key=self._portal_credentials()
+        except Exception as exc: messagebox.showerror("Cloud settings",str(exc),parent=self); return
+        try:
+            result=portal_clear_current_tournament(url,key)
+            messagebox.showinfo("Current Tournament Cleared",f"Cleared current website data for {result.get('cleared_tournaments',0)} tournament record(s).",parent=self)
+        except Exception as exc: messagebox.showerror("Clear Current Tournament",str(exc),parent=self)
+
     def archive_public_tournament(self):
         try:
             url,key=self._portal_credentials(); roster,manifest=self._portal_roster_ready()
@@ -1649,6 +1779,7 @@ class ToughShotsApp(tk.Tk):
             try:
                 portal_publish_qualifying(url,key,roster,manifest,self.event_name_var.get(),self.event_date_var.get().strip())
                 portal_publish_jr_gold(url,key,roster,manifest,self.event_name_var.get(),self.event_date_var.get().strip())
+                portal_publish_match_play(url,key,roster,manifest,self.event_name_var.get(),self.event_date_var.get().strip())
                 result=portal_archive_tournament(url,key,roster,manifest,self.event_name_var.get(),self.event_date_var.get().strip())
                 self.after(0,lambda:self._archive_publish_done(result))
             except Exception as exc: self.after(0,lambda e=exc:self._job_failed("Tournament archive",e))

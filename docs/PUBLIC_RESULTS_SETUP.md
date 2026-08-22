@@ -16,7 +16,7 @@ Existing scorer PINs, lane data, and score audit information remain in the exist
 
 Open **6 Bowlers + Results** in the desktop application.
 
-First update the reusable local demographic database in **2 Demographics** whenever you receive a newer demographic export. On **6 Bowlers + Results**, click **Sync Permanent Bowlers from Local DB** to push that private local demographic snapshot to the permanent cloud bowler database.
+First update the reusable local demographic database in **1 Bowler Database** whenever you receive a newer demographic export. On **6 Bowlers + Results**, click **Sync Permanent Bowlers from Local DB** to push that private local demographic snapshot to the permanent cloud bowler database.
 
 The importer looks for:
 - Bowlers First Name (or a common First Name variation)

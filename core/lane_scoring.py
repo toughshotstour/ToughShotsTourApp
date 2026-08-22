@@ -46,8 +46,12 @@ def roster_rows(roster_path):
         birthdate = (row.get("Birthdate_Used") or "").strip()
         if not first or not last or not division:
             continue
-        raw_key = f"{source_row}|{first}|{last}|{birthdate}|{division}"
-        bowler_id = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
+        # Prefer the permanent Bowler ID carried forward from the master database.
+        # Fall back to the historical roster hash for older files.
+        bowler_id = (row.get("Bowler_ID") or row.get("BowlerID") or "").strip()
+        if not bowler_id:
+            raw_key = f"{source_row}|{first}|{last}|{birthdate}|{division}"
+            bowler_id = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
         result.append({
             "bowler_id": bowler_id,
             "first_name": first,
@@ -60,7 +64,26 @@ def roster_rows(roster_path):
     return result
 
 
-def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tournament", tournament_id=None):
+def _load_group_assignments(group_assignments):
+    """Normalize an optional bowler_id -> group_id mapping."""
+    if not group_assignments:
+        return {}
+    if isinstance(group_assignments, (str, Path)):
+        path = Path(group_assignments)
+        if not path.is_file():
+            return {}
+        group_assignments = json.loads(path.read_text(encoding="utf-8"))
+    return {str(k): str(v).strip() for k, v in dict(group_assignments).items() if str(v).strip()}
+
+
+def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tournament", tournament_id=None, group_assignments=None):
+    """Create balanced lane-pair assignments with optional same-pair groups.
+
+    Priority order:
+      1. Keep any explicit group ID together on one lane pair.
+      2. Keep pair sizes as even as those groups allow.
+      3. Keep divisions clustered/adjacent as much as practical.
+    """
     lane_count = int(lane_count)
     if lane_count < 1:
         raise ValueError("Number of lanes must be at least 1.")
@@ -71,113 +94,123 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
             f"There are {len(bowlers)} bowlers, so the number of lanes cannot exceed {len(bowlers)}."
         )
 
-    # Balance the *lane pairs* first, across the whole field. Pair totals may
-    # differ by at most one bowler. Divisions are then packed into those pair
-    # capacities as intact blocks whenever possible. If perfectly even pair
-    # sizes require a mixed pair, divisions may mix, but each division's
-    # bowlers stay next to one another on the scorecard.
-    division_order = ["U12 Mixed", "U14 Boys", "U14 Girls", "U16 Boys", "U16 Girls", "U18 Boys", "U18 Girls"]
-    grouped = {}
-    for bowler in bowlers:
-        grouped.setdefault(bowler["division"], []).append(bowler)
-    active_divisions = [d for d in division_order if d in grouped] + sorted(d for d in grouped if d not in division_order)
-
     pair_lane_numbers = [list(range(start, min(start + 2, lane_count + 1))) for start in range(1, lane_count + 1, 2)]
     pair_count = len(pair_lane_numbers)
-    base_size, extra_pairs = divmod(len(bowlers), pair_count)
-    pair_capacities = [base_size + (1 if i < extra_pairs else 0) for i in range(pair_count)]
+    target_low = len(bowlers) // pair_count
+    target_high = (len(bowlers) + pair_count - 1) // pair_count
 
-    # Pick a division order that minimizes mixed scorecards for the fixed,
-    # globally-even capacities. There are normally only seven divisions, so a
-    # complete permutation search is small and gives much better results than
-    # a greedy pass (for example, it can discover 5 | 3+2 rather than splitting
-    # a five-bowler division across both cards).
-    import itertools
-
-    division_counts = {d: len(grouped[d]) for d in active_divisions}
-
-    def simulate_order(order):
-        remaining = {d: division_counts[d] for d in order}
-        pair_groups = []
-        div_idx = 0
-        for capacity in pair_capacities:
-            left = capacity
-            groups_here = []
-            while left > 0:
-                while div_idx < len(order) and remaining[order[div_idx]] == 0:
-                    div_idx += 1
-                if div_idx >= len(order):
-                    raise RuntimeError("Internal lane assignment error: ran out of bowlers.")
-                division = order[div_idx]
-                take = min(left, remaining[division])
-                groups_here.append((division, take))
-                remaining[division] -= take
-                left -= take
-                if remaining[division] == 0:
-                    div_idx += 1
-            pair_groups.append(groups_here)
-
-        mixed_pairs = sum(1 for groups in pair_groups if len(groups) > 1)
-        # A secondary measure favors fewer total division fragments across all
-        # scorecards. The final tie-breaker keeps the familiar division order
-        # as much as possible.
-        fragments = sum(len(groups) for groups in pair_groups)
-        order_penalty = sum(abs(active_divisions.index(d) - i) for i, d in enumerate(order))
-        return (mixed_pairs, fragments, order_penalty), pair_groups
-
-    best_score = None
-    best_groups = None
-    # 7! = 5040, which is trivial at tournament-prep time. If a custom roster
-    # somehow has many more division labels, use a size-first heuristic rather
-    # than exploding the permutation search.
-    if len(active_divisions) <= 8:
-        orders = itertools.permutations(active_divisions)
-    else:
-        orders = [tuple(sorted(active_divisions, key=lambda d: (-division_counts[d], d)))]
-    for order in orders:
-        score, groups = simulate_order(order)
-        if best_score is None or score < best_score:
-            best_score = score
-            best_groups = groups
-
+    group_map = _load_group_assignments(group_assignments)
     rng = random.SystemRandom()
-    division_queues = {}
-    for division in active_divisions:
-        rows = list(grouped[division])
-        rng.shuffle(rows)
-        division_queues[division] = rows
+
+    # Build atomic bundles. Ungrouped bowlers are single-person bundles. Explicit
+    # groups are guaranteed to remain on one pair, even when that slightly hurts
+    # the otherwise-even scorecard counts.
+    bundles_by_key = {}
+    for bowler in bowlers:
+        gid = group_map.get(str(bowler["bowler_id"]), "")
+        key = f"group:{gid}" if gid else f"single:{bowler['bowler_id']}"
+        bundles_by_key.setdefault(key, []).append(bowler)
+
+    bundles = []
+    for key, members in bundles_by_key.items():
+        rng.shuffle(members)
+        divisions = []
+        for b in members:
+            if b["division"] not in divisions:
+                divisions.append(b["division"])
+        bundles.append({
+            "key": key,
+            "group_id": key.split(":", 1)[1] if key.startswith("group:") else "",
+            "members": members,
+            "size": len(members),
+            "divisions": divisions,
+        })
+
+    max_group = max(b["size"] for b in bundles)
+    if max_group > target_high:
+        # This is allowed because the user's explicit group is the stronger rule.
+        target_high = max_group
+
+    # Largest groups first. Among equal sizes, keep similar divisions close. A
+    # randomized tie-break means lane assignments remain genuinely randomized.
+    rng.shuffle(bundles)
+    bundles.sort(key=lambda b: (-b["size"], b["divisions"][0] if b["divisions"] else ""))
+
+    pairs = [{"bundles": [], "load": 0, "divisions": []} for _ in range(pair_count)]
+    for bundle in bundles:
+        best_idx = None
+        best_score = None
+        for idx, pair in enumerate(pairs):
+            projected = pair["load"] + bundle["size"]
+            overflow = max(0, projected - target_high)
+            # Prefer a pair already containing one of the same divisions, then the
+            # lightest pair. This keeps divisions clustered without sacrificing the
+            # primary balancing objective.
+            shared = any(d in pair["divisions"] for d in bundle["divisions"])
+            division_penalty = 0 if shared or not pair["divisions"] else 1
+            distance = abs(projected - target_low)
+            score = (overflow, pair["load"], division_penalty, distance, idx)
+            if best_score is None or score < best_score:
+                best_score, best_idx = score, idx
+        pair = pairs[best_idx]
+        pair["bundles"].append(bundle)
+        pair["load"] += bundle["size"]
+        for d in bundle["divisions"]:
+            if d not in pair["divisions"]:
+                pair["divisions"].append(d)
+
+    # Improve balance by moving whole bundles when it reduces max-min spread.
+    improved = True
+    while improved:
+        improved = False
+        loads = [p["load"] for p in pairs]
+        current_spread = max(loads) - min(loads)
+        for src_i in sorted(range(pair_count), key=lambda i: pairs[i]["load"], reverse=True):
+            for dst_i in sorted(range(pair_count), key=lambda i: pairs[i]["load"]):
+                if src_i == dst_i:
+                    continue
+                for bidx, bundle in enumerate(list(pairs[src_i]["bundles"])):
+                    new_loads = list(loads)
+                    new_loads[src_i] -= bundle["size"]
+                    new_loads[dst_i] += bundle["size"]
+                    spread = max(new_loads) - min(new_loads)
+                    if spread < current_spread:
+                        pairs[src_i]["bundles"].pop(bidx)
+                        pairs[dst_i]["bundles"].append(bundle)
+                        pairs[src_i]["load"] -= bundle["size"]
+                        pairs[dst_i]["load"] += bundle["size"]
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
 
     lanes = {lane: [] for lane in range(1, lane_count + 1)}
     pair_divisions = {}
-    for pair_index, (lane_numbers, groups_here) in enumerate(zip(pair_lane_numbers, best_groups)):
-        pair_rows = []
-        names = []
-        for division, count in groups_here:
-            names.append(division)
-            chunk = division_queues[division][:count]
-            del division_queues[division][:count]
-            # Keep this division as one contiguous block within the pair.
-            pair_rows.extend(chunk)
-        pair_divisions[pair_index] = " / ".join(names)
+    pair_group_ids = {}
+    for pair_index, (lane_numbers, pair) in enumerate(zip(pair_lane_numbers, pairs)):
+        # Keep members of the same division adjacent on the printed scorecard.
+        members = []
+        for bundle in pair["bundles"]:
+            members.extend(bundle["members"])
+        # Sort by division blocks, but preserve random order within each division.
+        division_rank = {}
+        for b in members:
+            division_rank.setdefault(b["division"], len(division_rank))
+        members.sort(key=lambda b: division_rank[b["division"]])
 
+        pair_divisions[pair_index] = " / ".join(dict.fromkeys(b["division"] for b in members))
+        pair_group_ids[pair_index] = sorted({bundle["group_id"] for bundle in pair["bundles"] if bundle["group_id"]})
         if len(lane_numbers) == 1:
-            lanes[lane_numbers[0]].extend(pair_rows)
+            lanes[lane_numbers[0]].extend(members)
         else:
-            # The first/odd lane receives half rounded up; the second/even lane
-            # receives half rounded down. Keeping pair_rows in sequence also
-            # keeps mixed-division groups adjacent across the lane break.
-            odd_count = (len(pair_rows) + 1) // 2
-            lanes[lane_numbers[0]].extend(pair_rows[:odd_count])
-            lanes[lane_numbers[1]].extend(pair_rows[odd_count:])
+            odd_count = (len(members) + 1) // 2
+            lanes[lane_numbers[0]].extend(members[:odd_count])
+            lanes[lane_numbers[1]].extend(members[odd_count:])
 
     tournament_id = tournament_id or secrets.token_urlsafe(12)
-    lane_rows = [
-        {
-            "lane_no": lane,
-            "bowlers": lanes[lane],
-        }
-        for lane in sorted(lanes)
-    ]
+    lane_rows = [{"lane_no": lane, "bowlers": lanes[lane]} for lane in sorted(lanes)]
     lane_pairs = []
     for pair_index, lane_numbers in enumerate(pair_lane_numbers):
         lane_pairs.append({
@@ -185,21 +218,41 @@ def assign_lanes(roster_path, lane_count, *, tournament_name="Tough Shots Tourna
             "token": secrets.token_urlsafe(24),
             "lane_nos": lane_numbers,
             "division": pair_divisions.get(pair_index, ""),
+            "group_ids": pair_group_ids.get(pair_index, []),
         })
 
-    manifest = {
-        "schema_version": 3,
+    return {
+        "schema_version": 4,
         "tournament_id": tournament_id,
         "tournament_name": tournament_name.strip() or "Tough Shots Tournament",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "qualifying_games": 6,
         "lane_count": lane_count,
-        "assignment_method": "globally_balanced_pairs_division_clustered",
+        "assignment_method": "balanced_pairs_with_optional_groups",
         "lanes": lane_rows,
         "lane_pairs": lane_pairs,
     }
-    return manifest
 
+
+def move_bowler_to_lane(manifest, bowler_id, target_lane):
+    """Move one bowler to a specific lane in an existing manifest."""
+    target_lane = int(target_lane)
+    lanes = {int(x["lane_no"]): x for x in manifest.get("lanes", [])}
+    if target_lane not in lanes:
+        raise ValueError(f"Lane {target_lane} is not part of this assignment.")
+    found = None
+    for lane in lanes.values():
+        for i, bowler in enumerate(lane.get("bowlers", [])):
+            if str(bowler.get("bowler_id")) == str(bowler_id):
+                found = lane["bowlers"].pop(i)
+                break
+        if found:
+            break
+    if not found:
+        raise ValueError("Bowler was not found in this lane assignment.")
+    lanes[target_lane].setdefault("bowlers", []).append(found)
+    manifest["edited_at"] = datetime.now().isoformat(timespec="seconds")
+    return manifest
 
 def save_manifest(manifest, folder):
     folder = Path(folder)
