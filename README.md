@@ -155,3 +155,8 @@ After a tournament has been published to the cloud archive, use **6 Bowlers + Re
 ## Current tournament publishing
 
 The **Bowlers + Results** page can independently push Qualifying, Jr. Gold, and Match Play to the public website. Regular qualifying cut sizes default to the largest power-of-two bracket that does not exceed half the division field (for example, 15 bowlers → cut 4 and 16 bowlers → cut 8). Public qualifying pages show the cut line plus the division high game and high first-three-game set. **Clear Current Tournament from Website** removes live qualifying/Jr. Gold/match-play information without deleting archived tournaments or Bowler-of-the-Year history.
+
+
+## Print Center and live lane assignments
+
+The main desktop app now consolidates qualifying, Jr. Gold, and match-play printing under **6 Print Center**. Match-play printing groups divisions by relative round number: every division still in its first match-play round prints together even when their cut sizes differ. Generating lane score sheets also publishes the exact lane assignments to **Current Tournament > Lane Assignments**, sorted publicly by last name.

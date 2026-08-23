@@ -31,18 +31,21 @@ from core.lane_scoring import (
     reset_scorer_pin, delete_scorer, move_bowler_to_lane, roster_rows,
 )
 from core.import_archive import archive_imports
+from core.printing import create_qualifying_pdf, create_jr_gold_pdf, create_current_brackets_pdf, send_pdf_to_printer
 from core.local_demographics import (
     update_from_csv as update_local_demographic_db,
     require_database as require_local_bowler_database,
     count_rows as local_demographic_count,
     list_local_bowlers, add_local_bowler, update_local_bowler, delete_local_bowler,
     set_local_jr_gold_by_bowler_ids, DIVISIONS as LOCAL_DIVISIONS, missing_from_registration,
+    sync_from_cloud_bowlers,
 )
 from core.results_portal import (
     import_bowlers as portal_import_bowlers, list_bowlers as portal_list_bowlers,
     set_jr_gold as portal_set_jr_gold, publish_qualifying as portal_publish_qualifying,
     publish_jr_gold as portal_publish_jr_gold, archive_tournament as portal_archive_tournament,
     publish_match_play as portal_publish_match_play, clear_current_tournament as portal_clear_current_tournament,
+    publish_lane_assignments as portal_publish_lane_assignments,
 )
 
 try:
@@ -176,6 +179,10 @@ class ToughShotsApp(tk.Tk):
     # ------------------------------------------------------------------
     def _configure_styles(self):
         self.configure(bg="#f4f7fb")
+        # Keep native Tk buttons visually consistent with ttk action buttons.
+        self.option_add("*Button.font", ("Segoe UI", 10, "bold"))
+        self.option_add("*Button.padX", 14)
+        self.option_add("*Button.padY", 9)
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
@@ -244,24 +251,31 @@ class ToughShotsApp(tk.Tk):
             "Primary.TButton",
             font=("Segoe UI", 10, "bold"),
             padding=(14, 9),
-            background="#1f6feb",
-            foreground="#ffffff",
+            background="#d7dbe0",
+            foreground="#1f2937",
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#1859bd"), ("disabled", "#94a3b8")],
-            foreground=[("disabled", "#e2e8f0")],
+            background=[("active", "#c5cbd2"), ("disabled", "#e5e7eb")],
+            foreground=[("disabled", "#9ca3af")],
         )
         style.configure(
             "Secondary.TButton",
-            font=("Segoe UI", 9),
-            padding=(10, 7),
+            font=("Segoe UI", 10, "bold"),
+            padding=(14, 9),
+            background="#d7dbe0",
+            foreground="#1f2937",
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("active", "#c5cbd2"), ("disabled", "#e5e7eb")],
+            foreground=[("disabled", "#9ca3af")],
         )
         style.configure(
             "Nav.TButton",
             anchor="w",
-            font=("Segoe UI", 10),
-            padding=(16, 11),
+            font=("Segoe UI", 10, "bold"),
+            padding=(16, 12),
             background="#13233a",
             foreground="#cbd5e1",
             borderwidth=0,
@@ -276,7 +290,7 @@ class ToughShotsApp(tk.Tk):
             anchor="w",
             font=("Segoe UI", 10, "bold"),
             padding=(16, 11),
-            background="#1f6feb",
+            background="#64748b",
             foreground="#ffffff",
             borderwidth=0,
         )
@@ -306,7 +320,8 @@ class ToughShotsApp(tk.Tk):
             ("divisions", "3  Divisions"),
             ("tournament", "4  Tournament"),
             ("lanes", "5  Lanes + Mobile"),
-            ("results", "6  Bowlers + Results"),
+            ("printing", "6  Print Center"),
+            ("results", "7  Bowlers + Results"),
         ]
         for key, text in nav_items:
             btn = ttk.Button(
@@ -350,6 +365,7 @@ class ToughShotsApp(tk.Tk):
         self.pages["divisions"] = self._build_divisions_page()
         self.pages["tournament"] = self._build_tournament_page()
         self.pages["lanes"] = self._build_lanes_page()
+        self.pages["printing"] = self._build_printing_page()
         self.pages["results"] = self._build_results_page()
 
         for page in self.pages.values():
@@ -488,7 +504,8 @@ class ToughShotsApp(tk.Tk):
         actions = ttk.Frame(body, style="Card.TFrame")
         actions.grid(row=3, column=0, sticky="w")
         ttk.Button(actions, text="Update Master Database", command=self.update_local_demographics, style="Primary.TButton").pack(side="left")
-        ttk.Button(actions, text="Manage Local Bowlers", command=self.manage_local_bowlers, style="Secondary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions, text="Download Master Database from Website", command=self.download_master_bowlers, style="Secondary.TButton").pack(side="left", padx=8)
+        ttk.Button(actions, text="Manage Local Bowlers", command=self.manage_local_bowlers, style="Secondary.TButton").pack(side="left", padx=(0,8))
         ttk.Button(actions, text="Show Missing Demographics", command=self.show_missing_demographics, style="Secondary.TButton").pack(side="left")
         return page
 
@@ -552,6 +569,12 @@ class ToughShotsApp(tk.Tk):
         ).pack(side="left", padx=8)
         ttk.Button(
             actions,
+            text="Jr. Gold Settings",
+            command=self.open_jr_gold_settings,
+            style="Secondary.TButton",
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
             text="Open Division Folder",
             command=lambda: self.open_path(Path(self.division_output_var.get())),
             style="Secondary.TButton",
@@ -580,27 +603,37 @@ class ToughShotsApp(tk.Tk):
         settings.columnconfigure(1, weight=1)
         ttk.Label(settings, text="Tournament name", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Entry(settings, textvariable=self.event_name_var).grid(row=0, column=1, sticky="ew", pady=4)
-        ttk.Label(settings, text="Print title", style="FieldLabel.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(settings, textvariable=self.print_title_var).grid(row=1, column=1, sticky="ew", pady=4)
-        ttk.Label(settings, text="Available lanes", style="FieldLabel.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Spinbox(settings, textvariable=self.lane_count_var, from_=1, to=200, width=8).grid(row=2, column=1, sticky="w", pady=4)
-        ttk.Label(settings, text="Cloud scoring URL", style="FieldLabel.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(settings, textvariable=self.cloud_url_var).grid(row=3, column=1, sticky="ew", pady=4)
-        ttk.Label(settings, text="Cloud admin key", style="FieldLabel.TLabel").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(settings, textvariable=self.cloud_admin_key_var, show="•").grid(row=4, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Available lanes", style="FieldLabel.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Spinbox(settings, textvariable=self.lane_count_var, from_=1, to=200, width=8).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(settings, text="Cloud scoring URL", style="FieldLabel.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(settings, textvariable=self.cloud_url_var).grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Cloud admin key", style="FieldLabel.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(settings, textvariable=self.cloud_admin_key_var, show="•").grid(row=3, column=1, sticky="ew", pady=4)
 
-        actions = ttk.Frame(body, style="Card.TFrame")
-        actions.grid(row=2, column=0, sticky="ew", pady=(4, 10))
-        ttk.Button(actions, text="Lane Groups", command=self.manage_lane_groups, style="Secondary.TButton").pack(side="left")
-        ttk.Button(actions, text="Prepare Lane Assignment", command=self.prepare_lane_scoring, style="Primary.TButton").pack(side="left", padx=8)
-        ttk.Button(actions, text="Review / Move Bowlers", command=self.edit_lane_assignments, style="Secondary.TButton").pack(side="left")
-        ttk.Button(actions, text="Generate Score Sheets", command=self.generate_lane_scoresheets, style="Secondary.TButton").pack(side="left", padx=8)
+        steps = ttk.LabelFrame(body, text="Lane setup — use these in order", padding=14)
+        steps.grid(row=2, column=0, sticky="ew", pady=(4, 12))
+        steps.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(
+            steps, text="1. Set Lane Groups\n(Optional)", command=self.manage_lane_groups, style="Secondary.TButton"
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Button(
+            steps, text="2. Build Lane Assignment", command=self.prepare_lane_scoring, style="Primary.TButton"
+        ).grid(row=0, column=1, sticky="ew", padx=6)
+        ttk.Button(
+            steps, text="3. Generate Score Sheets", command=self.generate_lane_scoresheets, style="Primary.TButton"
+        ).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        ttk.Label(
+            steps,
+            text="After Step 2, the review window opens automatically so you can move bowlers before printing.",
+            style="Hint.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        actions2=ttk.Frame(body,style="Card.TFrame")
-        actions2.grid(row=3,column=0,sticky="w",pady=(0,10))
-        ttk.Button(actions2, text="Manage Scorer PINs", command=self.manage_scorer_pins, style="Secondary.TButton").pack(side="left")
-        ttk.Button(actions2, text="Retry Publish", command=self.retry_lane_publish, style="Secondary.TButton").pack(side="left", padx=8)
-        ttk.Button(actions2, text="Sync Mobile Scores", command=self.sync_mobile_scores, style="Secondary.TButton").pack(side="left")
+        mobile_tools = ttk.LabelFrame(body, text="Mobile scoring & assignment tools", padding=12)
+        mobile_tools.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        for col in range(3): mobile_tools.columnconfigure(col, weight=1)
+        ttk.Button(mobile_tools, text="Manage Scorer PINs", command=self.manage_scorer_pins, style="Secondary.TButton").grid(row=0,column=0,sticky="ew",padx=(0,5))
+        ttk.Button(mobile_tools, text="Republish Mobile Scoring", command=self.retry_lane_publish, style="Secondary.TButton").grid(row=0,column=1,sticky="ew",padx=5)
+        ttk.Button(mobile_tools, text="Sync Mobile Scores", command=self.sync_mobile_scores, style="Secondary.TButton").grid(row=0,column=2,sticky="ew",padx=(5,0))
 
         outputs = ttk.Frame(body, style="Card.TFrame")
         outputs.grid(row=4, column=0, sticky="ew", pady=(4, 8))
@@ -617,6 +650,26 @@ class ToughShotsApp(tk.Tk):
             variable=self.auto_sync_var,
             command=self._auto_sync_changed,
         ).grid(row=5, column=0, sticky="w", pady=(8, 4))
+        return page
+
+    def _build_printing_page(self):
+        page = WorkflowPage(
+            self.page_host,
+            "Print Center",
+            "Print qualifying standings, Jr. Gold qualifying standings, and the current match-play round from one place.",
+        )
+        body = page.body
+        settings = ttk.Frame(body, style="Card.TFrame")
+        settings.grid(row=0, column=0, sticky="ew", pady=(0, 18)); settings.columnconfigure(1, weight=1)
+        ttk.Label(settings, text="Print title", style="FieldLabel.TLabel").grid(row=0,column=0,sticky="w",padx=(0,10),pady=4)
+        ttk.Entry(settings, textvariable=self.print_title_var).grid(row=0,column=1,sticky="ew",pady=4)
+        ttk.Label(body, text="Tournament forms", style="Section.TLabel").grid(row=1,column=0,sticky="w",pady=(0,8))
+        actions = ttk.Frame(body, style="Card.TFrame")
+        actions.grid(row=2,column=0,sticky="w",pady=(0,16))
+        ttk.Button(actions,text="Print Qualifying - All Divisions",command=self.print_all_qualifying,style="Primary.TButton").pack(side="left")
+        ttk.Button(actions,text="Print Jr. Gold Qualifying",command=self.print_all_jr_gold,style="Secondary.TButton").pack(side="left",padx=8)
+        ttk.Button(actions,text="Print Current Match Play Round",command=self.print_current_match_round,style="Secondary.TButton").pack(side="left")
+        ttk.Label(body,text="Bracket printing uses each division's round number. First-round brackets print together even when the cut sizes are different; then second-round brackets print together, and so on.",style="CardText.TLabel",wraplength=760,justify="left").grid(row=3,column=0,sticky="w")
         return page
 
     def _build_results_page(self):
@@ -849,6 +902,49 @@ class ToughShotsApp(tk.Tk):
             )
         except Exception as exc:
             messagebox.showerror("Demographic update failed", str(exc), parent=self)
+
+    def download_master_bowlers(self):
+        """Pull the private permanent-bowler list from Render into the local master DB."""
+        url = self.cloud_url_var.get().strip()
+        key = self.cloud_admin_key_var.get().strip()
+        if not url or not key:
+            messagebox.showerror(
+                "Cloud settings required",
+                "Enter the Cloud scoring URL and Cloud admin key on Lane Assignment + Mobile Scoring first.",
+                parent=self,
+            )
+            return
+        if self._busy:
+            return
+        workspace = Path(self.workspace_var.get()).expanduser()
+        workspace.mkdir(parents=True, exist_ok=True)
+        if not messagebox.askyesno(
+            "Download Master Database?",
+            "Download the private permanent bowler database from the website and merge it into this local workspace?\n\n"
+            "Cloud demographic/Jr. Gold values will refresh matching local bowlers. Local-only bowlers and local email addresses will be kept.",
+            parent=self,
+        ):
+            return
+        self._busy = True
+        self.status_var.set("Downloading permanent bowlers from website…")
+
+        def worker():
+            try:
+                response = portal_list_bowlers(url, key)
+                result = sync_from_cloud_bowlers(workspace, response.get("bowlers", []))
+                self.after(0, lambda: finished(result))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._job_failed("Master database download", e))
+
+        def finished(result):
+            self._busy = False
+            self.status_var.set("Local master bowler database refreshed from website")
+            details = f"Added locally: {result['created']}\nUpdated locally: {result['updated']}\nSkipped: {result['skipped']}"
+            if result.get("errors"):
+                details += "\n\nNeeds attention:\n" + "\n".join(result["errors"][:12])
+            messagebox.showinfo("Master Database Downloaded", details, parent=self)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def manage_local_bowlers(self):
         workspace = Path(self.workspace_var.get()).expanduser()
@@ -1474,7 +1570,8 @@ class ToughShotsApp(tk.Tk):
         counts=[len(x["bowlers"]) for x in manifest["lanes"]]; by_lane={int(x["lane_no"]):len(x["bowlers"]) for x in manifest["lanes"]}
         pair_counts=[sum(by_lane.get(int(n),0) for n in pair.get("lane_nos",[])) for pair in manifest.get("lane_pairs",[])]
         self.status_var.set(f"Lane assignment ready — review it before generating score sheets")
-        messagebox.showinfo("Lane Assignment Ready",f"Assignment published successfully.\n\nBowlers: {sum(counts)}\nScorecards: {len(pair_counts)}\nBowlers per scorecard: {min(pair_counts)}-{max(pair_counts)}\n\nReview or move bowlers now, then click Generate Score Sheets.",parent=self)
+        messagebox.showinfo("Lane Assignment Ready",f"Assignment published successfully.\n\nBowlers: {sum(counts)}\nScorecards: {len(pair_counts)}\nBowlers per scorecard: {min(pair_counts)}-{max(pair_counts)}\n\nThe review window will open next. Move anyone you need, save, then generate score sheets.",parent=self)
+        self.after(100, self.edit_lane_assignments)
 
     def edit_lane_assignments(self):
         path=Path(self.lane_manifest_var.get()).expanduser()
@@ -1521,9 +1618,15 @@ class ToughShotsApp(tk.Tk):
         if not path.is_file(): messagebox.showerror("No assignment","Prepare a lane assignment first.",parent=self); return
         try:
             pdf=path.parent/"lane_scoresheets.pdf"
-            create_scoresheet_pdf(load_manifest(path),pdf,self.cloud_url_var.get().strip(),print_title=self.print_title_var.get().strip())
+            manifest = load_manifest(path)
+            create_scoresheet_pdf(manifest,pdf,self.cloud_url_var.get().strip(),print_title=self.print_title_var.get().strip())
             self.lane_pdf_var.set(str(pdf)); self._save_workspace_state()
-            messagebox.showinfo("Score Sheets Ready",f"Created:\n{pdf}",parent=self)
+            try:
+                portal_publish_lane_assignments(self.cloud_url_var.get().strip(), self.cloud_admin_key_var.get().strip(), manifest, self.event_date_var.get().strip())
+                note = "Created score sheets and published the matching lane assignments."
+            except Exception as publish_exc:
+                note = f"Score sheets were created, but the public lane-assignment page could not be updated.\n\n{publish_exc}"
+            messagebox.showinfo("Score Sheets Ready",f"{note}\n\n{pdf}",parent=self)
         except Exception as exc: messagebox.showerror("Score sheets",str(exc),parent=self)
 
     def retry_lane_publish(self):
@@ -1709,8 +1812,153 @@ class ToughShotsApp(tk.Tk):
         manifest=Path(self.lane_manifest_var.get()).expanduser()
         return roster, (manifest if manifest.is_file() else None)
 
+    def _standings_game_mismatches(self):
+        """Return bowlers with fewer entered games than peers in their division.
+
+        This is intentionally a warning, not a hard stop: tournament-day data can
+        be incomplete on purpose, but the operator should know before publishing
+        or printing standings.
+        """
+        roster = Path(self.tournament_roster_var.get()).expanduser()
+        if not roster.is_file():
+            return []
+        from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
+        db = TournamentDB(resolve_database_path(roster))
+        try:
+            if not db.roster_loaded():
+                db.import_roster(roster)
+            issues = []
+            for division in db.divisions():
+                rows = db.qualifying_rows(division)
+                if not rows:
+                    continue
+                counts = []
+                for row in rows:
+                    count = sum(v is not None for v in (row.get("scores") or []))
+                    counts.append((row, count))
+                most = max((c for _, c in counts), default=0)
+                if most <= 0:
+                    continue
+                for row, count in counts:
+                    if count < most:
+                        name = f"{proper_name(row.get('first_name'))} {proper_name(row.get('last_name'))}".strip()
+                        issues.append((division, name, count, most))
+            return issues
+        finally:
+            db.close()
+
+    def _confirm_standings_completeness(self, action_label):
+        issues = self._standings_game_mismatches()
+        if not issues:
+            return True
+        lines = []
+        for division, name, count, most in issues[:18]:
+            lines.append(f"• {division}: {name} has {count} game(s); others have up to {most}.")
+        if len(issues) > 18:
+            lines.append(f"• ...and {len(issues) - 18} more bowler(s).")
+        message = (
+            f"Some bowlers have fewer entered games than other bowlers in their division.\n\n"
+            + "\n".join(lines)
+            + f"\n\nContinue with {action_label} anyway?"
+        )
+        return messagebox.askyesno("Incomplete Standings", message, parent=self, icon="warning")
+
+    def _require_active_tournament_for_printing(self):
+        roster = Path(self.tournament_roster_var.get()).expanduser()
+        if not roster.is_file():
+            raise ValueError("Choose or reload the current tournament roster first.")
+        workspace = Path(self.workspace_var.get()).expanduser()
+        workspace.mkdir(parents=True, exist_ok=True)
+        self._save_workspace_state()
+        return roster, workspace
+
+    def _finish_print_job(self, label, path, extra=""):
+        sent = send_pdf_to_printer(path)
+        msg = ("Sent to the default printer.\n\n" if sent else "Created PDF. Open it to print.\n\n")
+        if extra: msg += extra + "\n\n"
+        msg += str(path)
+        messagebox.showinfo(label, msg, parent=self)
+
+    def print_all_qualifying(self):
+        try:
+            if not self._confirm_standings_completeness("printing qualifying standings"):
+                return
+            roster, workspace = self._require_active_tournament_for_printing()
+            path = create_qualifying_pdf(roster, workspace, self.print_title_var.get().strip())
+            self._finish_print_job("Qualifying Printing", path)
+        except Exception as exc:
+            messagebox.showerror("Qualifying Printing", str(exc), parent=self)
+
+    def print_all_jr_gold(self):
+        try:
+            if not self._confirm_standings_completeness("printing Jr. Gold standings"):
+                return
+            roster, workspace = self._require_active_tournament_for_printing()
+            path = create_jr_gold_pdf(roster, workspace, self.print_title_var.get().strip())
+            self._finish_print_job("Jr. Gold Printing", path)
+        except Exception as exc:
+            messagebox.showerror("Jr. Gold Printing", str(exc), parent=self)
+
+    def print_current_match_round(self):
+        try:
+            roster, workspace = self._require_active_tournament_for_printing()
+            path, round_no, divisions = create_current_brackets_pdf(roster, workspace, self.print_title_var.get().strip())
+            self._finish_print_job("Bracket Printing", path, f"Tournament round {round_no}\nDivisions: {', '.join(divisions)}")
+        except Exception as exc:
+            messagebox.showerror("Bracket Printing", str(exc), parent=self)
+
+    def open_jr_gold_settings(self):
+        try:
+            roster = Path(self.tournament_roster_var.get()).expanduser()
+            if not roster.is_file(): raise ValueError("Choose or reload the current tournament roster first.")
+            from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
+            db = TournamentDB(resolve_database_path(roster))
+            if not db.roster_loaded(): db.import_roster(roster)
+        except Exception as exc:
+            messagebox.showerror("Jr. Gold Settings", str(exc), parent=self); return
+        win=tk.Toplevel(self); win.title("Jr. Gold Qualifier Settings"); win.geometry("620x610"); win.resizable(False,False)
+        outer=ttk.Frame(win,padding=16); outer.pack(fill="both",expand=True)
+        ttk.Label(outer,text="Jr. Gold Qualifier",font=("Segoe UI",16,"bold")).pack(anchor="w")
+        current=db.jr_gold_settings(); merge_vars={age:tk.BooleanVar(value=current["merges"].get(age,False)) for age in ("U14","U16","U18")}
+        draft_cuts={k:str(v) for k,v in current.get("cuts",{}).items()}
+        merge_box=ttk.LabelFrame(outer,text="Division grouping",padding=10); merge_box.pack(fill="x",pady=(10,12))
+        for age in ("U14","U16","U18"):
+            ttk.Checkbutton(merge_box,text=f"Combine {age} Boys + Girls",variable=merge_vars[age]).pack(anchor="w",pady=4)
+        cuts_box=ttk.LabelFrame(outer,text="Cut lines",padding=10); cuts_box.pack(fill="both",expand=True)
+        cut_vars={}
+        def remember():
+            for group,var in list(cut_vars.items()): draft_cuts[group]=var.get()
+        def rebuild(*_):
+            remember()
+            for child in cuts_box.winfo_children(): child.destroy()
+            cut_vars.clear()
+            preview={"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":draft_cuts}
+            for r,group in enumerate(db.jr_gold_group_names(preview)):
+                ttk.Label(cuts_box,text=group,font=("Segoe UI",10,"bold")).grid(row=r,column=0,sticky="w",padx=(0,14),pady=6)
+                var=tk.StringVar(value=draft_cuts.get(group,"0")); cut_vars[group]=var
+                ttk.Spinbox(cuts_box,textvariable=var,from_=0,to=200,width=8).grid(row=r,column=1,sticky="w",pady=6)
+        for v in merge_vars.values(): v.trace_add("write",rebuild)
+        rebuild()
+        def close_db():
+            try: db.close()
+            except Exception: pass
+            win.destroy()
+        def save():
+            try:
+                remember(); visible=db.jr_gold_group_names({"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":draft_cuts})
+                cuts={g:int(draft_cuts.get(g,"0") or 0) for g in visible}
+                db.set_jr_gold_settings({"merges":{a:v.get() for a,v in merge_vars.items()},"cuts":cuts})
+                messagebox.showinfo("Jr. Gold Settings","Jr. Gold settings saved.",parent=win); close_db()
+            except Exception as exc: messagebox.showerror("Jr. Gold Settings",str(exc),parent=win)
+        bottom=ttk.Frame(outer); bottom.pack(fill="x",pady=(12,0))
+        ttk.Button(bottom,text="Cancel",command=close_db,style="Secondary.TButton").pack(side="right")
+        ttk.Button(bottom,text="Save Settings",command=save,style="Primary.TButton").pack(side="right",padx=8)
+        win.protocol("WM_DELETE_WINDOW",close_db)
+
     def push_public_qualifying(self):
         try:
+            if not self._confirm_standings_completeness("publishing qualifying standings"):
+                return
             url,key=self._portal_credentials(); roster,manifest=self._portal_roster_ready()
         except Exception as exc: messagebox.showerror("Cannot publish standings",str(exc),parent=self); return
         self.status_var.set("Publishing qualifying standings…")
@@ -1728,6 +1976,8 @@ class ToughShotsApp(tk.Tk):
 
     def push_jr_gold_qualifying(self):
         try:
+            if not self._confirm_standings_completeness("publishing Jr. Gold standings"):
+                return
             url,key=self._portal_credentials(); roster,manifest=self._portal_roster_ready()
         except Exception as exc: messagebox.showerror("Cannot publish Jr. Gold standings",str(exc),parent=self); return
         self.status_var.set("Publishing Jr. Gold qualifying standings…")

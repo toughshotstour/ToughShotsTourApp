@@ -1143,20 +1143,8 @@ class TournamentApp(tk.Tk):
 
         ttk.Button(
             controls,
-            text="Jr. Gold Settings",
-            command=self.open_jr_gold_settings,
-        ).pack(side="left", padx=4)
-
-        ttk.Button(
-            controls,
             text="Create / Re-seed Match Play",
             command=self.open_seed_dialog,
-        ).pack(side="left", padx=4)
-
-        ttk.Button(
-            controls,
-            text="Print Qualifying Page",
-            command=self.print_qualifying_page,
         ).pack(side="left", padx=4)
 
         self.qual_status = ttk.Label(controls, text="")
@@ -1616,12 +1604,6 @@ class TournamentApp(tk.Tk):
             controls,
             text="Refresh Bracket",
             command=self.refresh_match_play,
-        ).pack(side="left", padx=4)
-
-        ttk.Button(
-            controls,
-            text="Print Current Round - All Divisions",
-            command=self.print_current_round,
         ).pack(side="left", padx=4)
 
         self.match_status = ttk.Label(controls, text="")

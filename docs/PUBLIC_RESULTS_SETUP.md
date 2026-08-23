@@ -114,7 +114,7 @@ Older archived performances are backfilled with this formula when the updated cl
 Jr. Gold qualifying is separate from regular qualifying/match-play cuts.
 
 1. In the private Permanent Bowlers manager, mark eligible bowlers `JG` or `Q`.
-2. Open Tournament Manager and click **Jr. Gold Settings** on the Qualifying tab.
+2. In the main Tough Shots app, open **Tournament** and click **Jr. Gold Settings**.
 3. Set separate Jr. Gold cut sizes.
 4. Optionally merge Boys + Girls for U14, U16, and/or U18. These merges affect only Jr. Gold standings. U12 remains Mixed.
 5. Back in the main Tough Shots app, click **Push Jr. Gold Standings**.

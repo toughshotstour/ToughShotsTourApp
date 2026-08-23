@@ -45,10 +45,10 @@ Open **2 — Bowler Database** and choose **Manage Local Bowlers** to search, ad
 
 ## Printing
 
-The desktop suite has a shared **Print title** setting on the Lane Assignment + Mobile Scoring page. The value is saved with the active workspace and passed into Tournament Manager. It appears at the top of lane score sheets, qualifying score pages, and match-play bracket pages.
+The desktop suite has a shared **Print title** setting in the **Print Center**. The value is saved with the active workspace and passed into Tournament Manager. It appears at the top of lane score sheets, qualifying score pages, and match-play bracket pages.
 
 Tournament Manager includes:
 - **Print Qualifying Page** on the Qualifying tab for the selected division.
-- **Print Current Round - All Divisions** on Match Play. It finds the largest unfinished round anywhere in the tournament and prints only divisions currently in that same round. For example, while any divisions are still in the Round of 16, Round-of-8 divisions are skipped. Each selected division uses four matches (8 bowlers) per page, with 4- or 2-bowler sheets as later rounds shrink.
+- **Print Current Match Play Round** in the main app Print Center. It prints divisions by relative round number, so first-round brackets print together even if one cut is 8 and another is 16. For example, while any divisions are still in the Round of 16, Round-of-8 divisions are skipped. Each selected division uses four matches (8 bowlers) per page, with 4- or 2-bowler sheets as later rounds shrink.
 
 Generated forms are saved beside the tournament database under `printed_forms/` before being sent to the default printer. If direct printing is unavailable, the PDF is opened/saved for manual printing.

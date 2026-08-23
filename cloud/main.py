@@ -374,7 +374,7 @@ h1{margin:0 0 4px;font-size:24px}.sub{color:#607086;margin-bottom:14px}.notice{p
 .login{max-width:420px;margin:12vh auto}.login input{box-sizing:border-box;width:100%;font-size:24px;letter-spacing:5px;text-align:center;padding:12px;border:1px solid #9aa9ba;border-radius:8px}
 .lane-title{font-size:20px;font-weight:900;margin:18px 0 7px;border-bottom:2px solid #26384d;padding-bottom:5px}.bowler{border:1px solid #c3ceda;border-radius:10px;padding:12px;margin:10px 0;background:#fbfcfe}.bowler-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:9px}.name{font-weight:800;font-size:17px}.total{font-weight:800;white-space:nowrap}
 .scoregrid{display:grid;grid-template-columns:repeat(6,minmax(72px,1fr));gap:8px}.game label{display:block;font-size:12px;font-weight:700;color:#5d6c7f;margin-bottom:3px}.game input{box-sizing:border-box;width:100%;font-size:20px;padding:10px 5px;text-align:center;border:1px solid #9aa9ba;border-radius:7px}
-button{background:#1769d2;color:#fff;border:0;border-radius:9px;padding:13px 18px;font-size:17px;font-weight:700;margin-top:14px;width:100%}.who{font-size:13px;color:#52677f;margin-bottom:10px}.logout{float:right;font-size:13px;color:#1769d2;text-decoration:none}.pairnav{display:flex;justify-content:space-between;gap:10px;margin:12px 0}.navbtn{display:inline-block;padding:10px 12px;border-radius:8px;background:#eef3f8;text-decoration:none;font-weight:700;color:#1769d2}
+button{background:#6b7280;color:#fff;border:0;border-radius:9px;padding:13px 18px;font-size:17px;font-weight:700;margin-top:14px;width:100%}.who{font-size:13px;color:#52677f;margin-bottom:10px}.logout{float:right;font-size:13px;color:#6b7280;text-decoration:none}.pairnav{display:flex;justify-content:space-between;gap:10px;margin:12px 0}.navbtn{display:inline-block;padding:10px 12px;border-radius:8px;background:#f1f3f5;text-decoration:none;font-weight:700;color:#6b7280}
 @media(max-width:600px){.wrap{padding:8px}.card{padding:10px;border-radius:9px}h1{font-size:21px}.scoregrid{grid-template-columns:repeat(3,1fr)}.game input{font-size:22px;padding:11px 5px}}
 </style>
 """
@@ -612,12 +612,26 @@ def init_portal_db():
             PRIMARY KEY(tournament_id, division),
             FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS public_lane_assignments (
+            tournament_id TEXT NOT NULL,
+            pair_no INTEGER NOT NULL,
+            lane_no INTEGER NOT NULL,
+            position_label TEXT NOT NULL,
+            bowler_id TEXT,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            division TEXT,
+            PRIMARY KEY(tournament_id, lane_no, position_label, first_name, last_name),
+            FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
+        );
         """)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(public_tournaments)").fetchall()}
         if "jr_gold_updated_at" not in cols:
             conn.execute("ALTER TABLE public_tournaments ADD COLUMN jr_gold_updated_at TEXT")
         if "match_play_updated_at" not in cols:
             conn.execute("ALTER TABLE public_tournaments ADD COLUMN match_play_updated_at TEXT")
+        if "lane_assignments_updated_at" not in cols:
+            conn.execute("ALTER TABLE public_tournaments ADD COLUMN lane_assignments_updated_at TEXT")
         # Backfill the now-finalized BOY formula for any tournaments archived by an older build.
         perf = conn.execute("SELECT tournament_id,division,first_name,last_name,qualifying_rank,match_wins,finish_label,boy_points FROM tournament_performance").fetchall()
         sizes = {}
@@ -830,6 +844,49 @@ async def api_publish_qualifying(request: Request, x_admin_key: str | None = Hea
     return {"ok": True, "tournament_id": tournament_id, "unmatched_bowlers": unmatched}
 
 
+@app.post("/api/public/lane-assignments")
+async def api_publish_lane_assignments(request: Request, x_admin_key: str | None = Header(default=None)):
+    require_admin(x_admin_key)
+    payload = await request.json()
+    tournament_id = str(payload.get("tournament_id", "")).strip()
+    name = str(payload.get("tournament_name", "Tough Shots Tournament")).strip() or "Tough Shots Tournament"
+    event_date = str(payload.get("event_date", "")).strip() or datetime.now().date().isoformat()
+    lanes = payload.get("lanes") or []
+    pairs = payload.get("lane_pairs") or []
+    if not tournament_id or not lanes:
+        raise HTTPException(status_code=400, detail="Tournament ID and lane assignments are required.")
+    pair_by_lane = {}
+    for pair in pairs:
+        for lane_no in pair.get("lane_nos") or []:
+            pair_by_lane[int(lane_no)] = int(pair.get("pair_no") or 0)
+    def pos_label(index):
+        n = int(index) + 1; out = ""
+        while n:
+            n, rem = divmod(n - 1, 26); out = chr(ord("A") + rem) + out
+        return out
+    lane_map = {int(l["lane_no"]): l for l in lanes}
+    rows = []
+    handled_pairs = set()
+    for lane_no in sorted(lane_map):
+        pair_no = pair_by_lane.get(lane_no, (lane_no + 1)//2)
+        if pair_no in handled_pairs: continue
+        handled_pairs.add(pair_no)
+        pair_lanes = sorted([ln for ln,pn in pair_by_lane.items() if pn == pair_no]) or [lane_no]
+        offset = 0
+        for ln in pair_lanes:
+            bowlers = lane_map.get(ln, {}).get("bowlers") or []
+            for i,b in enumerate(bowlers):
+                rows.append((pair_no, ln, pos_label(offset+i), str(b.get("bowler_id") or ""), proper_name(b.get("first_name","")), proper_name(b.get("last_name","")), str(b.get("division") or "")))
+            offset += len(bowlers)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO public_tournaments(tournament_id,name,event_date,status,lane_assignments_updated_at) VALUES(?,?,?,?,?) ON CONFLICT(tournament_id) DO UPDATE SET name=excluded.name,event_date=excluded.event_date,status='LIVE',lane_assignments_updated_at=excluded.lane_assignments_updated_at",(tournament_id,name,event_date,"LIVE",now_iso()))
+        conn.execute("DELETE FROM public_lane_assignments WHERE tournament_id=?",(tournament_id,))
+        conn.executemany("INSERT INTO public_lane_assignments(tournament_id,pair_no,lane_no,position_label,bowler_id,first_name,last_name,division) VALUES(?,?,?,?,?,?,?,?)",[(tournament_id,*r) for r in rows])
+        conn.commit()
+    return {"ok":True,"tournament_id":tournament_id,"bowlers":len(rows)}
+
+
 @app.post("/api/public/match-play")
 async def api_publish_match_play(request: Request, x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
@@ -858,15 +915,16 @@ async def api_publish_match_play(request: Request, x_admin_key: str | None = Hea
 def api_clear_current(x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
     with db() as conn:
-        ids={r["tournament_id"] for r in conn.execute("SELECT DISTINCT tournament_id FROM public_qualifying UNION SELECT DISTINCT tournament_id FROM public_jr_gold UNION SELECT DISTINCT tournament_id FROM public_match_play").fetchall()}
+        ids={r["tournament_id"] for r in conn.execute("SELECT DISTINCT tournament_id FROM public_qualifying UNION SELECT DISTINCT tournament_id FROM public_jr_gold UNION SELECT DISTINCT tournament_id FROM public_match_play UNION SELECT DISTINCT tournament_id FROM public_lane_assignments").fetchall()}
         conn.execute("DELETE FROM public_qualifying")
         conn.execute("DELETE FROM public_qualifying_settings")
         conn.execute("DELETE FROM public_jr_gold")
         conn.execute("DELETE FROM public_jr_gold_groups")
         conn.execute("DELETE FROM public_match_play")
-        conn.execute("UPDATE public_tournaments SET qualifying_updated_at=NULL,jr_gold_updated_at=NULL,match_play_updated_at=NULL")
+        conn.execute("DELETE FROM public_lane_assignments")
+        conn.execute("UPDATE public_tournaments SET qualifying_updated_at=NULL,jr_gold_updated_at=NULL,match_play_updated_at=NULL,lane_assignments_updated_at=NULL")
         # Keep archived tournament rows/performance history; discard empty live shells.
-        conn.execute("DELETE FROM public_tournaments WHERE archived_at IS NULL AND qualifying_updated_at IS NULL AND jr_gold_updated_at IS NULL AND match_play_updated_at IS NULL")
+        conn.execute("DELETE FROM public_tournaments WHERE archived_at IS NULL AND qualifying_updated_at IS NULL AND jr_gold_updated_at IS NULL AND match_play_updated_at IS NULL AND lane_assignments_updated_at IS NULL")
         conn.commit()
     return {"ok":True,"cleared_tournaments":len(ids)}
 
@@ -962,7 +1020,7 @@ async def api_publish_jr_gold(request: Request, x_admin_key: str | None = Header
 
 PORTAL_CSS = """
 <style>
-:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#152238;background:#f3f6fa}*{box-sizing:border-box}body{margin:0}a{color:#1769d2}.hero{background:#13233a;color:#fff;padding:34px 18px}.hero .inner,.main{max-width:1080px;margin:auto}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:#c7d2e2}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:#fff;border:1px solid #dbe3ed;border-radius:14px;padding:20px;text-decoration:none;color:#152238}.tile:hover{border-color:#1769d2}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:#66788d}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn{display:inline-block;background:#1769d2;color:#fff;text-decoration:none;padding:11px 14px;border-radius:9px;font-weight:700}.tablewrap{overflow:auto;background:#fff;border-radius:12px;border:1px solid #dbe3ed}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid #e6ebf1;text-align:left;white-space:nowrap}th{background:#eef3f8}.rank{font-weight:800}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:#edf3fb}.search{display:flex;gap:8px;margin:16px 0}.search input{flex:1;padding:11px;border:1px solid #aab6c4;border-radius:8px;font-size:16px}.search button{padding:10px 15px;background:#1769d2;color:#fff;border:0;border-radius:8px;font-weight:700}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}}
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#152238;background:#f3f6fa}*{box-sizing:border-box}body{margin:0}a{color:#6b7280}.hero{background:#13233a;color:#fff;padding:34px 18px}.hero .inner,.main{max-width:1080px;margin:auto}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:#c7d2e2}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:#fff;border:1px solid #dbe3ed;border-radius:14px;padding:20px;text-decoration:none;color:#152238}.tile:hover{border-color:#6b7280}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:#66788d}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn{display:inline-block;background:#6b7280;color:#fff;text-decoration:none;padding:11px 14px;border-radius:9px;font-weight:700}.tablewrap{overflow:auto;background:#fff;border-radius:12px;border:1px solid #dbe3ed}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid #e6ebf1;text-align:left;white-space:nowrap}th{background:#f1f3f5}.rank{font-weight:800}.cut-gap td{height:22px;padding:0;background:#f3f6fa;border-top:1px solid #d5dbe3;border-bottom:1px solid #d5dbe3}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:#eef0f2}.search{display:flex;gap:8px;margin:16px 0}.search input{flex:1;padding:11px;border:1px solid #aab6c4;border-radius:8px;font-size:16px}.search button{padding:10px 15px;background:#6b7280;color:#fff;border:0;border-radius:8px;font-weight:700}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}}
 </style>
 """
 
@@ -985,8 +1043,8 @@ def _division_from_slug(slug):
 def _latest_current_tournament(conn):
     return conn.execute(
         """SELECT * FROM public_tournaments
-           WHERE qualifying_updated_at IS NOT NULL OR jr_gold_updated_at IS NOT NULL OR match_play_updated_at IS NOT NULL
-           ORDER BY COALESCE(match_play_updated_at,jr_gold_updated_at,qualifying_updated_at,event_date) DESC LIMIT 1"""
+           WHERE qualifying_updated_at IS NOT NULL OR jr_gold_updated_at IS NOT NULL OR match_play_updated_at IS NOT NULL OR lane_assignments_updated_at IS NOT NULL
+           ORDER BY COALESCE(lane_assignments_updated_at,match_play_updated_at,jr_gold_updated_at,qualifying_updated_at,event_date) DESC LIMIT 1"""
     ).fetchone()
 
 
@@ -1007,6 +1065,7 @@ def current_tournament_index():
            "<a class='tile' href='/standings'><h2>Qualifying</h2></a>"
            "<a class='tile' href='/jr-gold'><h2>Jr. Gold Qualifying</h2></a>"
            "<a class='tile' href='/match-play'><h2>Match Play</h2></a>"
+           "<a class='tile' href='/lane-assignments'><h2>Lane Assignments</h2></a>"
            "</div>")
     return _page("Current Tournament", f"<p><a href='/'>← Home</a></p><h2>Current Tournament</h2>{event}{tiles}")
 
@@ -1036,9 +1095,10 @@ def standings_division(division_slug: str):
         valid=[int(x) for x in scores if x is not None]
         game_text = " / ".join("—" if x is None else str(x) for x in scores)
         avg = "—" if r["average"] is None else f"{r['average']:.2f}"
-        boundary=" style='border-bottom:4px solid #1769d2'" if cut and int(r["rank"])==cut else ""
         name=f"{proper_name(r['first_name'])} {proper_name(r['last_name'])}"
-        trs.append(f"<tr{boundary}><td class='rank'>{r['rank']}</td><td>{html.escape(name)}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(name)}</td><td class='games'>{game_text}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        if cut and int(r["rank"]) == cut and int(r["rank"]) < len(rows):
+            trs.append("<tr class='cut-gap'><td colspan='5' aria-label='Cut line'></td></tr>")
         if valid:
             hg=max(valid)
             if hg>high_game: high_game=hg; high_game_names=[name]
@@ -1056,6 +1116,18 @@ def standings_division(division_slug: str):
     cut_note=f"Cut line: top {cut}." if cut else "No cut line."
     body = f"<p><a href='/standings'>← Divisions</a></p><h2>{html.escape(division)}</h2><p><strong>{html.escape(t['name'])}</strong> <span class='status'>{html.escape(t['status'])}</span><br><span class='muted'>{html.escape(t['event_date'])} · {html.escape(cut_note)}</span></p>{table}{stats}"
     return _page(f"{division} Standings", body)
+
+
+@app.get("/lane-assignments", response_class=HTMLResponse)
+def lane_assignments_page():
+    with db() as conn:
+        t = conn.execute("SELECT * FROM public_tournaments WHERE lane_assignments_updated_at IS NOT NULL ORDER BY lane_assignments_updated_at DESC LIMIT 1").fetchone()
+        rows = [] if not t else conn.execute("SELECT * FROM public_lane_assignments WHERE tournament_id=? ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE, lane_no, position_label",(t["tournament_id"],)).fetchall()
+    if not t:
+        return _page("Lane Assignments", "<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p>No lane assignments have been published yet.</p>")
+    trs = "".join(f"<tr><td>{html.escape(proper_name(r['last_name']))}, {html.escape(proper_name(r['first_name']))}</td><td>{r['lane_no']}</td><td>{html.escape(r['position_label'])}</td><td>{html.escape(r['division'] or '')}</td></tr>" for r in rows)
+    table = "<p>No bowlers have been assigned yet.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Bowler</th><th>Lane</th><th>Pos.</th><th>Division</th></tr></thead><tbody>" + trs + "</tbody></table></div>"
+    return _page("Lane Assignments", f"<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{table}")
 
 
 @app.get("/match-play", response_class=HTMLResponse)
@@ -1170,8 +1242,9 @@ def jr_gold_group(division_slug: str):
     trs=[]; cut=int(g["cut_size"] or 0)
     for r in rows:
         scores=_json.loads(r["scores_json"]); games=" / ".join("—" if x is None else str(x) for x in scores); avg="—" if r["average"] is None else f"{r['average']:.2f}"
-        boundary=" style='border-bottom:4px solid #1769d2'" if cut and int(r["rank"])==cut else ""
-        trs.append(f"<tr{boundary}><td class='rank'>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{html.escape(r['jr_gold_state'])}</td><td class='games'>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{html.escape(r['jr_gold_state'])}</td><td class='games'>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        if cut and int(r["rank"]) == cut and int(r["rank"]) < len(rows):
+            trs.append("<tr class='cut-gap'><td colspan='6' aria-label='Cut line'></td></tr>")
     table="<p>No eligible bowlers in this group.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>JG</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>"+"".join(trs)+"</tbody></table></div>"
     note=f"Cut line after place {cut}." if cut else "No cut line set."
     return _page(f"{g['group_name']} Jr. Gold",f"<p><a href='/jr-gold'>← Jr. Gold Divisions</a></p><h2>{html.escape(g['group_name'])} — Jr. Gold Qualifying</h2><p><strong>{html.escape(t['name'])}</strong><br>{html.escape(t['event_date'])} · {html.escape(note)}</p>{table}")

@@ -366,6 +366,86 @@ def set_local_jr_gold_by_bowler_ids(workspace, bowler_ids, state="Q"):
     export_snapshot(workspace)
     return count
 
+
+def sync_from_cloud_bowlers(workspace, bowlers):
+    """Merge the private cloud permanent-bowler list into the local master DB.
+
+    Cloud values refresh identity/demographic/Jr. Gold fields. Local-only bowlers
+    and local email addresses are preserved, so pulling is non-destructive.
+    """
+    conn = _connect(workspace)
+    created = updated = skipped = 0
+    errors = []
+    now = datetime.now().isoformat(timespec="seconds")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for index, item in enumerate(bowlers or [], start=1):
+            first = proper_name(item.get("first_name"))
+            last = proper_name(item.get("last_name"))
+            label = f"{first} {last}".strip() or f"Cloud bowler #{index}"
+            try:
+                birth_raw = str(item.get("birthdate") or "").strip()
+                if not first or not last or not birth_raw:
+                    raise ValueError("First name, last name, and birthdate are required.")
+                try:
+                    birth = normalize_birthdate(birth_raw)
+                except ValueError:
+                    birth = birth_raw
+                gender = normalize_gender(item.get("gender"))
+                usbc = str(item.get("usbc_id_raw") or item.get("usbc_id") or "").strip()
+                bowler_id = str(item.get("bowler_id") or "").strip()
+                division = str(item.get("division") or "").strip()
+                state = str(item.get("jr_gold_state") or item.get("jr_gold_status") or "").strip().upper()
+                if state not in JG_STATES:
+                    state = ""
+                if bowler_id and (not bowler_id.isdigit() or len(bowler_id) != 10):
+                    raise ValueError(f"Cloud Bowler ID {bowler_id!r} is not 10 digits.")
+                identity = _person_identity(first, last, birth)
+
+                existing = None
+                if bowler_id:
+                    existing = conn.execute("SELECT * FROM demographics WHERE bowler_id=?", (bowler_id,)).fetchone()
+                if not existing:
+                    existing = conn.execute("SELECT * FROM demographics WHERE identity_key=?", (identity,)).fetchone()
+                if existing:
+                    old_key = existing["identity_key"]
+                    email = existing["email"] or ""
+                    target_bid = bowler_id or existing["bowler_id"]
+                    if target_bid and target_bid != existing["bowler_id"]:
+                        conflict = conn.execute("SELECT identity_key FROM demographics WHERE bowler_id=? AND identity_key<>?", (target_bid, old_key)).fetchone()
+                        if conflict:
+                            raise ValueError(f"Bowler ID {target_bid} is already attached to another local bowler.")
+                    key_conflict = conn.execute("SELECT identity_key FROM demographics WHERE identity_key=? AND identity_key<>?", (identity, old_key)).fetchone()
+                    new_key = old_key if key_conflict else identity
+                    conn.execute(
+                        "UPDATE demographics SET identity_key=?,first_name=?,last_name=?,birthdate=?,gender=?,usbc_id=CASE WHEN ?<>'' THEN ? ELSE usbc_id END,email=?,division_override=?,bowler_id=?,jr_gold_status=?,updated_at=? WHERE identity_key=?",
+                        (new_key, first, last, birth, gender, usbc, usbc, email, division, target_bid, state, now, old_key),
+                    )
+                    updated += 1
+                else:
+                    if not bowler_id:
+                        if not _digits(usbc):
+                            raise ValueError("Cloud record has neither a Bowler ID nor a usable USBC ID.")
+                        bowler_id = _allocate_bowler_id(conn, usbc)
+                    if conn.execute("SELECT 1 FROM demographics WHERE bowler_id=?", (bowler_id,)).fetchone():
+                        raise ValueError(f"Bowler ID {bowler_id} already exists locally.")
+                    conn.execute(
+                        "INSERT INTO demographics(identity_key,first_name,last_name,birthdate,gender,usbc_id,email,updated_at,division_override,bowler_id,jr_gold_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (identity, first, last, birth, gender, usbc, "", now, division, bowler_id, state),
+                    )
+                    created += 1
+            except Exception as exc:
+                skipped += 1
+                errors.append(f"{label}: {exc}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    export_snapshot(workspace)
+    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
+
 def export_snapshot(workspace):
     """Export the local database using legacy-compatible names plus local metadata."""
     path = snapshot_path(workspace)

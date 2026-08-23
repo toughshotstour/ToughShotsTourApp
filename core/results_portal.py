@@ -323,3 +323,20 @@ def archive_payload(roster_path, manifest_path, tournament_name, event_date=None
 def archive_tournament(base_url, admin_key, roster_path, manifest_path, tournament_name, event_date=None):
     payload=archive_payload(roster_path,manifest_path,tournament_name,event_date)
     return _json_request(normalize_base_url(base_url)+"/api/public/archive",method="POST",payload=payload,admin_key=admin_key.strip())
+
+
+def publish_lane_assignments(base_url, admin_key, manifest, event_date=None):
+    """Publish the exact generated score-sheet lane assignment to the public Current Tournament page."""
+    payload = {
+        "tournament_id": str(manifest.get("tournament_id", "")).strip(),
+        "tournament_name": str(manifest.get("tournament_name", "Tough Shots Tournament")).strip() or "Tough Shots Tournament",
+        "event_date": event_date or date.today().isoformat(),
+        "lanes": manifest.get("lanes") or [],
+        "lane_pairs": manifest.get("lane_pairs") or [],
+    }
+    return _json_request(
+        normalize_base_url(base_url) + "/api/public/lane-assignments",
+        method="POST",
+        payload=payload,
+        admin_key=admin_key.strip(),
+    )
