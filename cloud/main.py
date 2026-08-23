@@ -287,13 +287,17 @@ async def publish(request: Request, x_admin_key: str | None = Header(default=Non
             "ON CONFLICT(tournament_id) DO UPDATE SET name=excluded.name, qualifying_games=excluded.qualifying_games, updated_at=excluded.updated_at",
             (tournament_id, name, games, now_iso()),
         )
-        conn.execute("DELETE FROM score_audit WHERE tournament_id=?", (tournament_id,))
-        conn.execute("DELETE FROM scores WHERE tournament_id=?", (tournament_id,))
+        reset_scores = bool(payload.get("reset_scores", True))
+        if reset_scores:
+            conn.execute("DELETE FROM score_audit WHERE tournament_id=?", (tournament_id,))
+            conn.execute("DELETE FROM scores WHERE tournament_id=?", (tournament_id,))
+        # Rebuild assignments/pair navigation every publish. When reset_scores is
+        # false, preserve score rows for bowlers who remain in the tournament.
         conn.execute("DELETE FROM assignments WHERE tournament_id=?", (tournament_id,))
-        conn.execute("DELETE FROM bowlers WHERE tournament_id=?", (tournament_id,))
         conn.execute("DELETE FROM lane_pair_sessions WHERE tournament_id=?", (tournament_id,))
 
         seen = set()
+        staged = []
         for lane in lanes:
             lane_no = int(lane["lane_no"])
             for position, bowler in enumerate(lane.get("bowlers") or [], start=1):
@@ -302,13 +306,18 @@ async def publish(request: Request, x_admin_key: str | None = Header(default=Non
                     raise HTTPException(status_code=400, detail=f"Bowler {bid} appears on multiple lanes.")
                 seen.add(bid)
                 conn.execute(
-                    "INSERT INTO bowlers(tournament_id,bowler_id,first_name,last_name,division) VALUES(?,?,?,?,?)",
+                    "INSERT INTO bowlers(tournament_id,bowler_id,first_name,last_name,division) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(tournament_id,bowler_id) DO UPDATE SET first_name=excluded.first_name,last_name=excluded.last_name,division=excluded.division",
                     (tournament_id, bid, proper_name(bowler["first_name"]), proper_name(bowler["last_name"]), bowler.get("division", "")),
                 )
-                conn.execute(
-                    "INSERT INTO assignments(tournament_id,lane_no,position,bowler_id) VALUES(?,?,?,?)",
-                    (tournament_id, lane_no, position, bid),
-                )
+                staged.append((tournament_id, lane_no, position, bid))
+        # Remove bowlers no longer assigned; ON DELETE CASCADE removes only their scores.
+        existing = conn.execute("SELECT bowler_id FROM bowlers WHERE tournament_id=?", (tournament_id,)).fetchall()
+        for row in existing:
+            if str(row["bowler_id"]) not in seen:
+                conn.execute("DELETE FROM bowlers WHERE tournament_id=? AND bowler_id=?", (tournament_id, row["bowler_id"]))
+        for item in staged:
+            conn.execute("INSERT INTO assignments(tournament_id,lane_no,position,bowler_id) VALUES(?,?,?,?)", item)
         valid_lanes = {int(x["lane_no"]) for x in lanes}
         for pair in pairs:
             lane_nos = [int(x) for x in pair.get("lane_nos") or []]
@@ -1119,15 +1128,25 @@ def standings_division(division_slug: str):
 
 
 @app.get("/lane-assignments", response_class=HTMLResponse)
-def lane_assignments_page():
+def lane_assignments_page(q: str = ""):
+    query = " ".join(str(q or "").strip().split())
     with db() as conn:
         t = conn.execute("SELECT * FROM public_tournaments WHERE lane_assignments_updated_at IS NOT NULL ORDER BY lane_assignments_updated_at DESC LIMIT 1").fetchone()
         rows = [] if not t else conn.execute("SELECT * FROM public_lane_assignments WHERE tournament_id=? ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE, lane_no, position_label",(t["tournament_id"],)).fetchall()
     if not t:
         return _page("Lane Assignments", "<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p>No lane assignments have been published yet.</p>")
+    if query:
+        needle = query.casefold()
+        words = [w for w in needle.split() if w]
+        rows = [r for r in rows if all(w in f"{r['first_name']} {r['last_name']} {r['last_name']} {r['first_name']}".casefold() for w in words)]
     trs = "".join(f"<tr><td>{html.escape(proper_name(r['last_name']))}, {html.escape(proper_name(r['first_name']))}</td><td>{r['lane_no']}</td><td>{html.escape(r['position_label'])}</td><td>{html.escape(r['division'] or '')}</td></tr>" for r in rows)
-    table = "<p>No bowlers have been assigned yet.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Bowler</th><th>Lane</th><th>Pos.</th><th>Division</th></tr></thead><tbody>" + trs + "</tbody></table></div>"
-    return _page("Lane Assignments", f"<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{table}")
+    if query and not trs:
+        table = f"<p>No lane assignment matched <strong>{html.escape(query)}</strong>.</p>"
+    else:
+        table = "<p>No bowlers have been assigned yet.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Bowler</th><th>Lane</th><th>Pos.</th><th>Division</th></tr></thead><tbody>" + trs + "</tbody></table></div>"
+    search = f"<form class='search' method='get' action='/lane-assignments'><input name='q' value='{html.escape(query, quote=True)}' placeholder='Search bowler name' aria-label='Search bowler name'><button type='submit'>Search</button></form>"
+    clear = "<p><a href='/lane-assignments'>Show all bowlers</a></p>" if query else ""
+    return _page("Lane Assignments", f"<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{search}{clear}{table}")
 
 
 @app.get("/match-play", response_class=HTMLResponse)

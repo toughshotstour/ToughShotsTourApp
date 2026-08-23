@@ -212,10 +212,10 @@ class TournamentDB:
             if not first or not last or not division:
                 continue
 
-            raw_key = f"{idx}|{first}|{last}|{birthdate}|{division}"
-            bowler_id = hashlib.sha1(
-                raw_key.encode("utf-8")
-            ).hexdigest()[:16]
+            bowler_id = (row.get("Bowler_ID") or row.get("BowlerID") or "").strip()
+            if not bowler_id:
+                raw_key = f"{idx}|{first}|{last}|{birthdate}|{division}"
+                bowler_id = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
 
             cur.execute(
                 """
@@ -263,6 +263,92 @@ class TournamentDB:
         self.set_meta("roster_path", str(csv_path.resolve()))
         self.set_meta("roster_imported_at", datetime.now().isoformat(timespec="seconds"))
         self.conn.commit()
+
+    def sync_roster(self, csv_path):
+        """Merge an edited active roster into an existing tournament DB.
+
+        Existing bowlers keep their DB IDs so qualifying scores survive name or
+        demographic corrections. Added/removed bowlers are applied without
+        resetting unrelated divisions. Brackets are invalidated only for
+        divisions whose membership changed.
+        """
+        csv_path = Path(csv_path)
+        with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            headers = set(reader.fieldnames or [])
+            missing = {"First_Name", "Last_Name", "Division"} - headers
+            if missing:
+                raise ValueError("Roster is missing required columns: " + ", ".join(sorted(missing)))
+            rows = list(reader)
+
+        def norm(v):
+            return " ".join(str(v or "").strip().casefold().split())
+
+        existing = self.conn.execute("SELECT * FROM bowlers").fetchall()
+        by_perm = {}
+        by_identity = {}
+        for old in existing:
+            try:
+                src = json.loads(old["source_json"] or "{}")
+            except Exception:
+                src = {}
+            permanent = str(src.get("Bowler_ID") or src.get("BowlerID") or "").strip()
+            if permanent:
+                by_perm[permanent] = old
+            by_identity[(norm(old["first_name"]), norm(old["last_name"]), norm(old["birthdate"]))] = old
+
+        seen_ids = set()
+        affected = set()
+        cur = self.conn.cursor()
+        for idx, row in enumerate(rows, start=2):
+            first = (row.get("First_Name") or "").strip()
+            last = (row.get("Last_Name") or "").strip()
+            division = (row.get("Division") or "").strip()
+            gender = (row.get("Gender") or "").strip()
+            birthdate = (row.get("Birthdate_Used") or "").strip()
+            if not first or not last or not division:
+                continue
+            permanent = (row.get("Bowler_ID") or row.get("BowlerID") or "").strip()
+            old = by_perm.get(permanent) if permanent else None
+            if old is None:
+                old = by_identity.get((norm(first), norm(last), norm(birthdate)))
+            if old is not None:
+                dbid = old["bowler_id"]
+                seen_ids.add(dbid)
+                if old["division"] != division:
+                    affected.update([old["division"], division])
+                cur.execute("""UPDATE bowlers SET source_row=?,first_name=?,last_name=?,gender=?,birthdate=?,division=?,source_json=? WHERE bowler_id=?""",
+                            (idx, first, last, gender, birthdate, division, json.dumps(row, ensure_ascii=False), dbid))
+            else:
+                dbid = permanent
+                if not dbid or cur.execute("SELECT 1 FROM bowlers WHERE bowler_id=?", (dbid,)).fetchone():
+                    raw_key = f"{idx}|{first}|{last}|{birthdate}|{division}"
+                    dbid = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
+                    while cur.execute("SELECT 1 FROM bowlers WHERE bowler_id=?", (dbid,)).fetchone():
+                        raw_key += "x"
+                        dbid = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
+                cur.execute("""INSERT INTO bowlers(bowler_id,source_row,first_name,last_name,gender,birthdate,division,source_json) VALUES(?,?,?,?,?,?,?,?)""",
+                            (dbid, idx, first, last, gender, birthdate, division, json.dumps(row, ensure_ascii=False)))
+                seen_ids.add(dbid)
+                affected.add(division)
+
+        for old in existing:
+            if old["bowler_id"] not in seen_ids:
+                affected.add(old["division"])
+                cur.execute("DELETE FROM scores WHERE bowler_id=?", (old["bowler_id"],))
+                cur.execute("DELETE FROM bowlers WHERE bowler_id=?", (old["bowler_id"],))
+
+        current_divisions = [r["division"] for r in cur.execute("SELECT DISTINCT division FROM bowlers").fetchall()]
+        cur.execute("DELETE FROM division_settings")
+        for division in current_divisions:
+            count = cur.execute("SELECT COUNT(*) AS n FROM bowlers WHERE division=?", (division,)).fetchone()["n"]
+            cur.execute("INSERT INTO division_settings(division,cut_size) VALUES(?,?)", (division, automatic_cut_size(count)))
+        for division in affected:
+            cur.execute("DELETE FROM brackets WHERE division=?", (division,))
+        self.set_meta("roster_path", str(csv_path.resolve()))
+        self.set_meta("roster_imported_at", datetime.now().isoformat(timespec="seconds"))
+        self.conn.commit()
+        return {"bowlers": len(seen_ids), "affected_divisions": sorted(x for x in affected if x)}
 
     def divisions(self):
         return [

@@ -160,3 +160,14 @@ The **Bowlers + Results** page can independently push Qualifying, Jr. Gold, and 
 ## Print Center and live lane assignments
 
 The main desktop app now consolidates qualifying, Jr. Gold, and match-play printing under **6 Print Center**. Match-play printing groups divisions by relative round number: every division still in its first match-play round prints together even when their cut sizes differ. Generating lane score sheets also publishes the exact lane assignments to **Current Tournament > Lane Assignments**, sorted publicly by last name.
+
+## Current Tournament Roster Editing
+Use **Tournament → Manage Current Tournament Bowlers** to make event-specific roster changes at any point before or after lane assignment.
+
+- **Add from Master Database** adds a permanent bowler to only the active tournament.
+- **Remove from This Tournament** removes the entry without deleting the master bowler record.
+- **Edit Bowler** saves the correction to the local master bowler database and updates the active tournament copy.
+- Existing Tournament Manager qualifying scores are preserved when matching bowlers are edited.
+- Existing lane/mobile assignments are reconciled after roster changes; mobile republishing preserves already-entered scores.
+
+The public **Current Tournament → Lane Assignments** page now includes a bowler-name search box.

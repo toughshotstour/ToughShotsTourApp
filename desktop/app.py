@@ -15,6 +15,8 @@ truth.
 from __future__ import annotations
 
 import os
+import csv
+import json
 import subprocess
 import sys
 import threading
@@ -569,6 +571,12 @@ class ToughShotsApp(tk.Tk):
         ).pack(side="left", padx=8)
         ttk.Button(
             actions,
+            text="Manage Current Tournament Bowlers",
+            command=self.manage_current_tournament_bowlers,
+            style="Secondary.TButton",
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
             text="Jr. Gold Settings",
             command=self.open_jr_gold_settings,
             style="Secondary.TButton",
@@ -1115,6 +1123,200 @@ class ToughShotsApp(tk.Tk):
         search_var.trace_add("write", lambda *_: refresh())
         search_entry.bind("<Escape>", lambda _e: search_var.set(""))
         refresh()
+
+    def _current_roster_data(self):
+        path = Path(self.tournament_roster_var.get()).expanduser()
+        if not path.is_file():
+            raise ValueError("Choose or create the current tournament roster first.")
+        with path.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            headers = list(reader.fieldnames or [])
+            rows = list(reader)
+        if not headers:
+            raise ValueError("The tournament roster has no columns.")
+        return path, headers, rows
+
+    def _write_current_roster(self, path, headers, rows):
+        required = ["First_Name", "Last_Name", "Gender", "Birthdate_Used", "Division", "Bowler_ID", "Jr_Gold_Status"]
+        for col in required:
+            if col not in headers:
+                headers.append(col)
+        order = {d: i for i, d in enumerate(LOCAL_DIVISIONS)}
+        rows.sort(key=lambda r: (order.get(str(r.get("Division") or ""), 99), str(r.get("Last_Name") or "").casefold(), str(r.get("First_Name") or "").casefold()))
+        with Path(path).open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+            writer.writeheader(); writer.writerows(rows)
+        # Keep the per-division convenience CSV files aligned with all_divisions.csv.
+        filenames = {"U12 Mixed":"U12_Mixed.csv","U14 Boys":"U14_Boys.csv","U14 Girls":"U14_Girls.csv","U16 Boys":"U16_Boys.csv","U16 Girls":"U16_Girls.csv","U18 Boys":"U18_Boys.csv","U18 Girls":"U18_Girls.csv"}
+        for division, filename in filenames.items():
+            with Path(path).with_name(filename).open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+                writer.writeheader(); writer.writerows([r for r in rows if str(r.get("Division") or "").strip() == division])
+        # Merge the roster into an already-opened/saved Tournament Manager DB without clearing scores.
+        try:
+            from tournament.bowling_tournament_manager import TournamentDB, resolve_database_path
+            db_path = resolve_database_path(path)
+            if db_path.is_file():
+                db = TournamentDB(db_path)
+                try: db.sync_roster(path)
+                finally: db.close()
+        except Exception as exc:
+            messagebox.showwarning("Tournament database update", f"The roster was saved, but the Tournament Manager database could not be refreshed:\n\n{exc}", parent=self)
+        self._reconcile_lane_manifest_with_roster(path)
+
+    def _reconcile_lane_manifest_with_roster(self, roster_path):
+        manifest_path = Path(self.lane_manifest_var.get()).expanduser()
+        if not manifest_path.is_file():
+            return
+        try:
+            manifest = load_manifest(manifest_path)
+            desired = {str(b["bowler_id"]): b for b in roster_rows(roster_path)}
+            present = set()
+            for lane in manifest.get("lanes", []):
+                kept = []
+                for bowler in lane.get("bowlers", []):
+                    bid = str(bowler.get("bowler_id"))
+                    if bid in desired:
+                        bowler.update({k: desired[bid][k] for k in ("first_name","last_name","division")})
+                        kept.append(bowler); present.add(bid)
+                lane["bowlers"] = kept
+            pairs = manifest.get("lane_pairs", [])
+            lane_map = {int(x["lane_no"]): x for x in manifest.get("lanes", [])}
+            for bid, bowler in desired.items():
+                if bid in present:
+                    continue
+                choices = []
+                for pair in pairs:
+                    lane_nos = [int(x) for x in pair.get("lane_nos", [])]
+                    members = [b for n in lane_nos for b in lane_map.get(n, {}).get("bowlers", [])]
+                    divisions = {str(b.get("division") or "") for b in members}
+                    choices.append((0 if bowler["division"] in divisions else 1, len(members), int(pair.get("pair_no", 999)), pair))
+                if not choices:
+                    continue
+                pair = min(choices, key=lambda x: x[:3])[3]
+                lane_nos = [int(x) for x in pair.get("lane_nos", [])]
+                target = min(lane_nos, key=lambda n: (len(lane_map[n].get("bowlers", [])), n))
+                lane_map[target].setdefault("bowlers", []).append(dict(bowler))
+            manifest["edited_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+            save_manifest(manifest, manifest_path.parent)
+            # Update the mobile assignment without erasing scores already submitted.
+            url, key = self.cloud_url_var.get().strip(), self.cloud_admin_key_var.get().strip()
+            if url and key:
+                try: publish_manifest(manifest, url, key, reset_scores=False)
+                except Exception as exc: messagebox.showwarning("Mobile scoring update", f"Local roster/lane changes were saved, but mobile scoring could not be refreshed:\n\n{exc}", parent=self)
+            # If score sheets had already been generated, refresh the PDF and matching public lane page.
+            pdf_path = manifest_path.parent / "lane_scoresheets.pdf"
+            if pdf_path.is_file():
+                create_scoresheet_pdf(manifest, pdf_path, url, print_title=self.print_title_var.get().strip())
+                self.lane_pdf_var.set(str(pdf_path))
+                if url and key:
+                    try: portal_publish_lane_assignments(url, key, manifest, self.event_date_var.get().strip())
+                    except Exception: pass
+        except Exception as exc:
+            messagebox.showwarning("Lane assignment update", f"The tournament roster was saved, but the existing lane assignment could not be refreshed:\n\n{exc}", parent=self)
+
+    def manage_current_tournament_bowlers(self):
+        try:
+            roster_path, headers, rows = self._current_roster_data()
+        except Exception as exc:
+            messagebox.showerror("Current tournament roster", str(exc), parent=self); return
+        workspace = Path(self.workspace_var.get()).expanduser()
+        win = tk.Toplevel(self); win.title("Manage Current Tournament Bowlers"); win.geometry("980x650"); win.minsize(820,520)
+        outer = ttk.Frame(win,padding=14); outer.pack(fill="both",expand=True)
+        ttk.Label(outer,text="Current Tournament Bowlers",font=("Segoe UI",17,"bold")).pack(anchor="w")
+        ttk.Label(outer,text="Add/remove affects only this tournament. Editing a bowler also saves the correction to the master bowler database.",style="Hint.TLabel").pack(anchor="w",pady=(3,10))
+        search_var=tk.StringVar(); search=ttk.Entry(outer,textvariable=search_var); search.pack(fill="x",pady=(0,8))
+        cols=("name","division","bowler_id","lane")
+        tree=ttk.Treeview(outer,columns=cols,show="headings",selectmode="browse")
+        for c,label,w in (("name","Bowler",300),("division","Division",150),("bowler_id","Bowler ID",140),("lane","Lane",70)):
+            tree.heading(c,text=label); tree.column(c,width=w,anchor="w")
+        tree.pack(fill="both",expand=True)
+
+        def lane_lookup():
+            result={}; mp=Path(self.lane_manifest_var.get()).expanduser()
+            if mp.is_file():
+                try:
+                    m=load_manifest(mp)
+                    for lane in m.get("lanes",[]):
+                        for b in lane.get("bowlers",[]): result[str(b.get("bowler_id"))]=lane.get("lane_no")
+                except Exception: pass
+            return result
+        def refresh(select_bid=None):
+            tree.delete(*tree.get_children()); lanes=lane_lookup(); needle=" ".join(search_var.get().casefold().split())
+            for idx,row in enumerate(rows):
+                name=f"{row.get('First_Name','')} {row.get('Last_Name','')}".strip(); bid=str(row.get("Bowler_ID") or row.get("BowlerID") or "").strip()
+                if needle and needle not in f"{name} {row.get('Division','')} {bid}".casefold(): continue
+                iid=f"r{idx}"; tree.insert("","end",iid=iid,values=(name,row.get("Division") or "",bid,lanes.get(bid,"")))
+                if select_bid and bid==select_bid: tree.selection_set(iid); tree.see(iid)
+        def selected_index():
+            sel=tree.selection()
+            if not sel: return None
+            return int(sel[0][1:])
+        def add_from_master():
+            current_ids={str(r.get("Bowler_ID") or r.get("BowlerID") or "").strip() for r in rows}
+            candidates=[b for b in list_local_bowlers(workspace) if str(b.get("bowler_id") or "") not in current_ids]
+            pick=tk.Toplevel(win); pick.title("Add from Master Bowler Database"); pick.geometry("760x520")
+            frame=ttk.Frame(pick,padding=12); frame.pack(fill="both",expand=True)
+            sv=tk.StringVar(); ttk.Entry(frame,textvariable=sv).pack(fill="x",pady=(0,8))
+            t=ttk.Treeview(frame,columns=("name","division","id"),show="headings",selectmode="extended")
+            for c,l,w in (("name","Bowler",300),("division","Division",150),("id","Bowler ID",150)): t.heading(c,text=l); t.column(c,width=w,anchor="w")
+            t.pack(fill="both",expand=True)
+            by_iid={}
+            def load(*_):
+                t.delete(*t.get_children()); q=sv.get().casefold().strip(); by_iid.clear()
+                for i,b in enumerate(candidates):
+                    text=f"{b['first_name']} {b['last_name']} {b.get('division','')} {b.get('bowler_id','')}".casefold()
+                    if q and q not in text: continue
+                    iid=f"b{i}"; by_iid[iid]=b; t.insert("","end",iid=iid,values=(f"{b['first_name']} {b['last_name']}",b.get("division") or "",b.get("bowler_id") or ""))
+            def add_selected():
+                selected=t.selection()
+                if not selected: return
+                for iid in selected:
+                    b=by_iid[iid]; row={h:"" for h in headers}
+                    row.update({"First_Name":b["first_name"],"Last_Name":b["last_name"],"Gender":b.get("gender") or "","Birthdate_Used":b.get("birthdate") or "","Demographic_DOB":b.get("birthdate") or "","Division":b.get("division") or "","Age_Division":str(b.get("division") or "").split()[0],"Bowler_ID":b.get("bowler_id") or "","Jr_Gold_Status":b.get("jr_gold_status") or "","Demographic_Entry":"YES","Paid_Entry":"YES","Designation":"MANUAL TOURNAMENT ADD"})
+                    rows.append(row)
+                self._write_current_roster(roster_path,headers,rows); pick.destroy(); refresh()
+            sv.trace_add("write",load); load(); ttk.Button(frame,text="Add Selected to Tournament",command=add_selected,style="Primary.TButton").pack(anchor="e",pady=(8,0))
+        def remove_selected():
+            idx=selected_index()
+            if idx is None: messagebox.showinfo("Select bowler","Select a tournament bowler first.",parent=win); return
+            row=rows[idx]; name=f"{row.get('First_Name','')} {row.get('Last_Name','')}".strip()
+            if not messagebox.askyesno("Remove from tournament",f"Remove {name} from this tournament only?\n\nTheir master database record will be kept.",parent=win): return
+            rows.pop(idx); self._write_current_roster(roster_path,headers,rows); refresh()
+        def edit_selected():
+            idx=selected_index()
+            if idx is None: messagebox.showinfo("Select bowler","Select a tournament bowler first.",parent=win); return
+            row=rows[idx]; bid=str(row.get("Bowler_ID") or row.get("BowlerID") or "").strip()
+            master=next((b for b in list_local_bowlers(workspace) if str(b.get("bowler_id") or "")==bid),None)
+            if not master:
+                messagebox.showerror("Master record not found","This tournament bowler is not linked to a master Bowler ID. Add/correct them in the Bowler Database first.",parent=win); return
+            edit=tk.Toplevel(win); edit.title("Edit Tournament Bowler / Master Record"); edit.geometry("520x500")
+            f=ttk.Frame(edit,padding=14); f.pack(fill="both",expand=True); f.columnconfigure(1,weight=1)
+            vars={k:tk.StringVar(value=str(master.get(k) or "")) for k in ("first_name","last_name","gender","birthdate","division","usbc_id","jr_gold_status","email")}
+            labels=[("first_name","First name"),("last_name","Last name"),("gender","Gender"),("birthdate","Birthdate"),("division","Division"),("usbc_id","USBC ID"),("jr_gold_status","Jr. Gold status"),("email","Email")]
+            for n,(key,label) in enumerate(labels):
+                ttk.Label(f,text=label).grid(row=n,column=0,sticky="w",padx=(0,8),pady=5)
+                values=None
+                if key=="gender": values=["Boy","Girl"]
+                elif key=="division": values=[""]+list(LOCAL_DIVISIONS)
+                elif key=="jr_gold_status": values=["","JG","Q"]
+                if values is not None: w=ttk.Combobox(f,textvariable=vars[key],values=values,state="readonly")
+                else: w=ttk.Entry(f,textvariable=vars[key])
+                w.grid(row=n,column=1,sticky="ew",pady=5)
+            def save_edit():
+                try:
+                    stable=update_local_bowler(workspace,master["identity_key"],first_name=vars["first_name"].get(),last_name=vars["last_name"].get(),gender=vars["gender"].get(),birthdate=vars["birthdate"].get(),usbc_id=vars["usbc_id"].get(),division=vars["division"].get(),jr_gold_status=vars["jr_gold_status"].get(),email=vars["email"].get())
+                    updated=next(b for b in list_local_bowlers(workspace) if b.get("bowler_id")==stable)
+                    row.update({"First_Name":updated["first_name"],"Last_Name":updated["last_name"],"Gender":updated.get("gender") or "","Birthdate_Used":updated.get("birthdate") or "","Demographic_DOB":updated.get("birthdate") or "","Division":updated.get("division") or "","Age_Division":str(updated.get("division") or "").split()[0],"Bowler_ID":stable,"Jr_Gold_Status":updated.get("jr_gold_status") or ""})
+                    self._write_current_roster(roster_path,headers,rows); edit.destroy(); refresh(stable)
+                except Exception as exc: messagebox.showerror("Could not save bowler",str(exc),parent=edit)
+            ttk.Button(f,text="Save to Master Database + Tournament",command=save_edit,style="Primary.TButton").grid(row=len(labels),column=0,columnspan=2,sticky="ew",pady=(14,0))
+        buttons=ttk.Frame(outer); buttons.pack(fill="x",pady=(10,0))
+        ttk.Button(buttons,text="Add from Master Database",command=add_from_master,style="Primary.TButton").pack(side="left")
+        ttk.Button(buttons,text="Edit Bowler",command=edit_selected,style="Secondary.TButton").pack(side="left",padx=8)
+        ttk.Button(buttons,text="Remove from This Tournament",command=remove_selected,style="Secondary.TButton").pack(side="left")
+        ttk.Button(buttons,text="Close",command=win.destroy,style="Secondary.TButton").pack(side="right")
+        search_var.trace_add("write",lambda *_:refresh()); refresh()
 
     def show_missing_demographics(self):
         registration=Path(self.registration_var.get()).expanduser()
