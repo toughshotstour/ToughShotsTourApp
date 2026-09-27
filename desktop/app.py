@@ -1731,8 +1731,8 @@ class ToughShotsApp(tk.Tk):
 
         win = tk.Toplevel(self)
         win.title("Manage PINs")
-        win.geometry("700x470")
-        win.minsize(650, 430)
+        win.geometry("700x560")
+        win.minsize(650, 520)
         win.transient(self)
         win.grab_set()
         frame = ttk.Frame(win, padding=16)
@@ -1744,7 +1744,7 @@ class ToughShotsApp(tk.Tk):
             wraplength=650, justify="left"
         ).pack(anchor="w", pady=(3, 12))
 
-        tree = ttk.Treeview(frame, columns=("name",), show="headings", height=11, selectmode="browse")
+        tree = ttk.Treeview(frame, columns=("name",), show="headings", height=8, selectmode="browse")
         tree.heading("name", text="Scorer Name")
         tree.column("name", width=590, anchor="w")
         tree.pack(fill="both", expand=True)
@@ -1835,7 +1835,7 @@ class ToughShotsApp(tk.Tk):
             **btn_opts
         ).pack(side="left")
 
-        admin_box = ttk.LabelFrame(frame, text="Website Admin PIN", padding=10)
+        admin_box = ttk.LabelFrame(frame, text="Website Admin Password", padding=10)
         admin_box.pack(fill="x", pady=(8, 8))
         admin_status = tk.StringVar(value="Checking...")
         ttk.Label(admin_box, textvariable=admin_status).pack(side="left")
@@ -1845,14 +1845,14 @@ class ToughShotsApp(tk.Tk):
                 admin_status.set("Configured" if status.get("configured") else "Not configured")
             except Exception as exc:
                 admin_status.set(f"Unavailable: {exc}")
-        def set_website_admin_pin():
-            pin=simpledialog.askstring("Set Website Admin PIN","Enter the 6-digit PIN required for website Admin Controls:",parent=win,show="*")
+        def set_website_admin_password():
+            pin=simpledialog.askstring("Set Website Admin Password","Enter the password required for website Admin Controls (any length):",parent=win,show="*")
             if pin is None: return
             try:
-                set_admin_pin(cloud_url,admin_key,pin); refresh_admin_status(); messagebox.showinfo("Admin PIN","Website Admin PIN updated. Existing website admin sessions were signed out.",parent=win)
+                set_admin_pin(cloud_url,admin_key,pin); refresh_admin_status(); messagebox.showinfo("Admin Password","Website Admin password updated. Existing website admin sessions were signed out.",parent=win)
             except Exception as exc:
-                messagebox.showerror("Admin PIN",str(exc),parent=win)
-        tk.Button(admin_box,text="Set Admin PIN",command=set_website_admin_pin,**btn_opts).pack(side="right")
+                messagebox.showerror("Admin Password",str(exc),parent=win)
+        tk.Button(admin_box,text="Set Admin Password",command=set_website_admin_password,**btn_opts).pack(side="right")
         refresh_admin_status()
 
         buttons = ttk.Frame(frame)

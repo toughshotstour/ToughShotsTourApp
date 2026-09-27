@@ -158,6 +158,13 @@ def validate_pin(pin: str) -> str:
     return pin
 
 
+def validate_admin_password(password: str) -> str:
+    password = str(password or "")
+    if not password:
+        raise HTTPException(status_code=400, detail="Admin password cannot be blank.")
+    return password
+
+
 def ensure_pin_available(conn: sqlite3.Connection, pin: str, exclude_scorer_id: int | None = None):
     rows = conn.execute("SELECT id,pin_salt,pin_hash FROM scorers").fetchall()
     for row in rows:
@@ -274,21 +281,23 @@ def web_admin_from_request(request: Request):
     return bool(row)
 
 
-@app.get("/api/admin-pin")
-def api_admin_pin_status(x_admin_key: str | None = Header(default=None)):
+@app.get("/api/admin-password")
+@app.get("/api/admin-pin")  # backwards-compatible alias
+def api_admin_password_status(x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
     with db() as conn:
         row = conn.execute("SELECT id FROM web_admin_pin WHERE id=1").fetchone()
     return {"configured": bool(row)}
 
 
-@app.post("/api/admin-pin")
-async def api_set_admin_pin(request: Request, x_admin_key: str | None = Header(default=None)):
+@app.post("/api/admin-password")
+@app.post("/api/admin-pin")  # backwards-compatible alias
+async def api_set_admin_password(request: Request, x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
     payload = await request.json()
-    pin = validate_pin(str(payload.get("pin", "")))
+    password = validate_admin_password(str(payload.get("password", payload.get("pin", ""))))
     salt = secrets.token_hex(16)
-    digest = pin_digest(pin, salt)
+    digest = pin_digest(password, salt)
     with db() as conn:
         conn.execute("INSERT INTO web_admin_pin(id,pin_salt,pin_hash,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET pin_salt=excluded.pin_salt,pin_hash=excluded.pin_hash,updated_at=excluded.updated_at", (salt,digest,now_iso()))
         conn.execute("DELETE FROM web_admin_sessions")
@@ -679,6 +688,29 @@ def init_portal_db():
         CREATE TABLE IF NOT EXISTS portal_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS boy_seasons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            period_start TEXT,
+            period_end TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS boy_season_rows (
+            season_id INTEGER NOT NULL,
+            division TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            bowler_id TEXT,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            events INTEGER NOT NULL DEFAULT 0,
+            qualifying_average REAL,
+            high_game INTEGER,
+            match_wins INTEGER NOT NULL DEFAULT 0,
+            boy_points REAL NOT NULL DEFAULT 0,
+            dropped_points REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY(season_id, division, rank),
+            FOREIGN KEY(season_id) REFERENCES boy_seasons(id) ON DELETE CASCADE
         );
         """)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(public_tournaments)").fetchall()}
@@ -1306,7 +1338,10 @@ def _boy_division_rows(conn, division: str):
 @app.get("/bowler-of-the-year", response_class=HTMLResponse)
 def boy_index():
     tiles = "".join(f"<a class='tile' href='/bowler-of-the-year/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
-    return _page("Bowler of the Year", f"<p><a href='/'>← Home</a></p><h2>Bowler of the Year</h2><div class='grid'>{tiles}</div>")
+    with db() as conn:
+        season_count = conn.execute("SELECT COUNT(*) c FROM boy_seasons").fetchone()["c"]
+    archive = f"<p><a class='btn' href='/bowler-of-the-year/archive'>Past BOY Seasons ({season_count})</a></p>" if season_count else ""
+    return _page("Bowler of the Year", f"<p><a href='/'>← Home</a></p><h2>Bowler of the Year</h2>{archive}<div class='grid'>{tiles}</div>")
 
 
 @app.get("/bowler-of-the-year/{division_slug}", response_class=HTMLResponse)
@@ -1324,6 +1359,43 @@ def boy_division(division_slug: str):
     trs = "".join(tr_parts)
     table = "<p>No archived performances yet.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>#</th><th>Bowler</th><th>Events</th><th>Qual. Avg.</th><th>High</th><th>Match Wins</th><th>BOY Points</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
     return _page(f"{division} Bowler of the Year", f"<p><a href='/bowler-of-the-year'>← Divisions</a></p><h2>{html.escape(division)} — Bowler of the Year</h2>{table}")
+
+
+@app.get("/bowler-of-the-year/archive", response_class=HTMLResponse)
+def boy_archive_index():
+    with db() as conn:
+        seasons = conn.execute("SELECT id,name,period_end,archived_at FROM boy_seasons ORDER BY archived_at DESC,id DESC").fetchall()
+    if not seasons:
+        body = "<p><a href='/bowler-of-the-year'>← Bowler of the Year</a></p><h2>Past BOY Seasons</h2><p>No seasons have been archived yet.</p>"
+    else:
+        tiles = "".join(f"<a class='tile' href='/bowler-of-the-year/archive/{r['id']}'><h2>{html.escape(r['name'])}</h2></a>" for r in seasons)
+        body = f"<p><a href='/bowler-of-the-year'>← Bowler of the Year</a></p><h2>Past BOY Seasons</h2><div class='grid'>{tiles}</div>"
+    return _page("Past BOY Seasons", body)
+
+
+@app.get("/bowler-of-the-year/archive/{season_id}", response_class=HTMLResponse)
+def boy_archive_season(season_id: int):
+    with db() as conn:
+        season = conn.execute("SELECT * FROM boy_seasons WHERE id=?", (season_id,)).fetchone()
+    if not season:
+        raise HTTPException(status_code=404, detail="BOY season not found")
+    tiles = "".join(f"<a class='tile' href='/bowler-of-the-year/archive/{season_id}/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
+    return _page(season['name'], f"<p><a href='/bowler-of-the-year/archive'>← Past Seasons</a></p><h2>{html.escape(season['name'])}</h2><div class='grid'>{tiles}</div>")
+
+
+@app.get("/bowler-of-the-year/archive/{season_id}/{division_slug}", response_class=HTMLResponse)
+def boy_archive_division(season_id: int, division_slug: str):
+    division = _division_from_slug(division_slug)
+    if not division:
+        raise HTTPException(status_code=404, detail="Division not found")
+    with db() as conn:
+        season = conn.execute("SELECT * FROM boy_seasons WHERE id=?", (season_id,)).fetchone()
+        rows = conn.execute("SELECT * FROM boy_season_rows WHERE season_id=? AND division=? ORDER BY rank", (season_id, division)).fetchall() if season else []
+    if not season:
+        raise HTTPException(status_code=404, detail="BOY season not found")
+    trs = "".join(f"<tr><td>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{r['events']}</td><td>{'—' if r['qualifying_average'] is None else f'{r['qualifying_average']:.2f}'}</td><td>{r['high_game'] or '—'}</td><td>{r['match_wins']}</td><td>{int(r['boy_points'])}</td></tr>" for r in rows)
+    table = "<p>No standings were saved for this division.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>#</th><th>Bowler</th><th>Events</th><th>Qual. Avg.</th><th>High</th><th>Match Wins</th><th>BOY Points</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
+    return _page(f"{division} — {season['name']}", f"<p><a href='/bowler-of-the-year/archive/{season_id}'>← {html.escape(season['name'])}</a></p><h2>{html.escape(division)} — {html.escape(season['name'])}</h2>{table}")
 
 
 def _jg_slug(name: str) -> str:
@@ -1533,7 +1605,7 @@ def archive_lanes(tournament_id:str,q:str=''):
 
 def _admin_login_box(message=''):
     notice=f"<p class='muted'>{html.escape(message)}</p>" if message else ''
-    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><h2>Admin Controls</h2><div class='loginbox'>{notice}<form method='post' action='/admin/login'><label>Admin PIN</label><p><input name='pin' inputmode='numeric' maxlength='6' type='password' required></p><button class='btn' type='submit'>Sign In</button></form></div>")
+    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><h2>Admin Controls</h2><div class='loginbox'>{notice}<form method='post' action='/admin/login'><label>Admin Password</label><p><input name='password' type='password' autocomplete='current-password' required></p><button class='btn' type='submit'>Sign In</button></form></div>")
 
 
 @app.get('/admin',response_class=HTMLResponse)
@@ -1542,16 +1614,17 @@ def admin_page(request:Request):
     with db() as conn: tournaments=conn.execute("SELECT tournament_id,name,event_date FROM public_tournaments WHERE archived_at IS NOT NULL ORDER BY event_date DESC").fetchall()
     rows=''.join(f"<tr><td>{html.escape(t['event_date'])}</td><td>{html.escape(t['name'])}</td><td><form method='post' action='/admin/archive/{html.escape(t['tournament_id'])}/delete' onsubmit=\"return confirm('Permanently remove this tournament from the archive?')\"><button class='danger' type='submit'>Remove</button></form></td></tr>" for t in tournaments)
     table="<p>No archived tournaments.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>Date</th><th>Tournament</th><th>Action</th></tr></thead><tbody>"+rows+"</tbody></table></div>"
-    boy_reset = '''<h3>Bowler of the Year</h3><p class='muted'>Start a new BOY standings period without deleting archived tournaments or historical performances.</p><form method='post' action='/admin/boy/clear' onsubmit="return confirm('Clear the current Bowler of the Year standings? Archived tournaments will be kept.');"><button class='danger' type='submit'>Clear Bowler of the Year Standings</button></form>'''
+    default_season = str(datetime.now(timezone.utc).year)
+    boy_reset = f'''<h3>Bowler of the Year</h3><p class='muted'>Archive the final standings at year-end, or start a fresh BOY period without deleting tournament history.</p><form method='post' action='/admin/boy/archive' onsubmit="return confirm('Archive the current Bowler of the Year standings?');"><label>Season name</label><p><input name='season_name' value='{default_season}' required></p><button class='btn' type='submit'>Archive Current BOY Season</button></form><br><form method='post' action='/admin/boy/clear' onsubmit="return confirm('Clear the current Bowler of the Year standings? Archived tournaments and archived BOY seasons will be kept.');"><button class='danger' type='submit'>Clear Bowler of the Year Standings</button></form>'''
     return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2>{boy_reset}<h3>Archived Tournaments</h3>{table}")
 
 
 @app.post('/admin/login')
 async def admin_login(request:Request):
-    check_login_rate(request); raw=(await request.body()).decode('utf-8',errors='replace'); form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}; pin=form.get('pin','').strip()
+    check_login_rate(request); raw=(await request.body()).decode('utf-8',errors='replace'); form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}; password=form.get('password','')
     with db() as conn:
         row=conn.execute("SELECT pin_salt,pin_hash FROM web_admin_pin WHERE id=1").fetchone()
-        if not row or not secrets.compare_digest(pin_digest(pin,row['pin_salt']),row['pin_hash']): record_login_failure(request); return _admin_login_box('Incorrect admin PIN.')
+        if not row or not secrets.compare_digest(pin_digest(password,row['pin_salt']),row['pin_hash']): record_login_failure(request); return _admin_login_box('Incorrect admin password.')
         token=secrets.token_urlsafe(32); created=datetime.now(timezone.utc); expires=created+timedelta(hours=SESSION_HOURS); conn.execute("INSERT INTO web_admin_sessions(token,created_at,expires_at) VALUES(?,?,?)",(token,created.isoformat(timespec='seconds'),expires.isoformat(timespec='seconds')))
     response=RedirectResponse('/admin',status_code=303); response.set_cookie('toughshots_admin',token,max_age=SESSION_HOURS*3600,httponly=True,samesite='lax',secure=(request.url.scheme=='https')); return response
 
@@ -1562,6 +1635,24 @@ def admin_logout(request:Request):
     if token:
         with db() as conn: conn.execute("DELETE FROM web_admin_sessions WHERE token=?",(token,))
     response=RedirectResponse('/admin',status_code=303); response.delete_cookie('toughshots_admin'); return response
+
+
+@app.post('/admin/boy/archive')
+async def admin_archive_boy(request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    raw=(await request.body()).decode('utf-8',errors='replace')
+    form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}
+    season_name=' '.join(form.get('season_name','').split()) or str(datetime.now(timezone.utc).year)
+    with db() as conn:
+        start=_boy_period_start(conn)
+        end=now_iso()
+        cur=conn.execute("INSERT INTO boy_seasons(name,period_start,period_end,archived_at) VALUES(?,?,?,?)",(season_name,start,end,end))
+        season_id=cur.lastrowid
+        for division in DIVISIONS:
+            rows=_boy_division_rows(conn,division)
+            for rank,r in enumerate(rows,1):
+                conn.execute("INSERT INTO boy_season_rows(season_id,division,rank,bowler_id,first_name,last_name,events,qualifying_average,high_game,match_wins,boy_points,dropped_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(season_id,division,rank,r.get('bowler_id'),r['first_name'],r['last_name'],int(r.get('events') or 0),r.get('avg'),r.get('high_game'),int(r.get('wins') or 0),float(r.get('points') or 0),float(r.get('dropped_points') or 0)))
+    return RedirectResponse(f'/bowler-of-the-year/archive/{season_id}',status_code=303)
 
 
 @app.post('/admin/boy/clear')

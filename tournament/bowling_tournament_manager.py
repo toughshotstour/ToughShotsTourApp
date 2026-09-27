@@ -140,6 +140,16 @@ class TournamentDB:
             )
         """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS qualifying_tiebreaks (
+                division TEXT NOT NULL,
+                bowler_id TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (division, bowler_id),
+                FOREIGN KEY (bowler_id) REFERENCES bowlers(bowler_id)
+            )
+        """)
+
         self.conn.commit()
 
         if self.get_meta("qualifying_games") is None:
@@ -203,6 +213,7 @@ class TournamentDB:
         cur.execute("DELETE FROM scores")
         cur.execute("DELETE FROM division_settings")
         cur.execute("DELETE FROM brackets")
+        cur.execute("DELETE FROM qualifying_tiebreaks")
 
         for idx, row in enumerate(rows, start=2):
             first = (row.get("First_Name") or "").strip()
@@ -392,6 +403,12 @@ class TournamentDB:
         if not 0 <= score <= 300:
             raise ValueError("Qualifying scores must be between 0 and 300.")
 
+        existing = self.conn.execute(
+            "SELECT score FROM scores WHERE bowler_id = ? AND game_no = ?",
+            (bowler_id, game_no),
+        ).fetchone()
+        changed = existing is None or int(existing["score"]) != score
+
         self.conn.execute(
             """
             INSERT INTO scores(bowler_id, game_no, score)
@@ -401,6 +418,17 @@ class TournamentDB:
             """,
             (bowler_id, game_no, score),
         )
+        # Only an actual score change invalidates a manual qualifying tie result.
+        if changed:
+            division_row = self.conn.execute(
+                "SELECT division FROM bowlers WHERE bowler_id = ?",
+                (bowler_id,),
+            ).fetchone()
+            if division_row:
+                self.conn.execute(
+                    "DELETE FROM qualifying_tiebreaks WHERE division = ?",
+                    (division_row["division"],),
+                )
         self.conn.commit()
 
     def delete_score(self, bowler_id, game_no):
@@ -408,6 +436,15 @@ class TournamentDB:
             "DELETE FROM scores WHERE bowler_id = ? AND game_no = ?",
             (bowler_id, int(game_no)),
         )
+        division_row = self.conn.execute(
+            "SELECT division FROM bowlers WHERE bowler_id = ?",
+            (bowler_id,),
+        ).fetchone()
+        if division_row:
+            self.conn.execute(
+                "DELETE FROM qualifying_tiebreaks WHERE division = ?",
+                (division_row["division"],),
+            )
         self.conn.commit()
 
     def scores_for_bowler(self, bowler_id):
@@ -508,6 +545,48 @@ class TournamentDB:
                 names.extend([f"{age} Boys", f"{age} Girls"])
         return names
 
+    def qualifying_tiebreak_priorities(self, division):
+        return {
+            row["bowler_id"]: int(row["priority"])
+            for row in self.conn.execute(
+                "SELECT bowler_id, priority FROM qualifying_tiebreaks WHERE division = ?",
+                (division,),
+            ).fetchall()
+        }
+
+    def set_qualifying_tie_winner(self, division, winner_id, tied_bowler_ids):
+        tied = [str(x) for x in tied_bowler_ids if x]
+        if winner_id not in tied:
+            raise ValueError("Selected bowler is not part of this qualifying tie.")
+        if len(tied) < 2:
+            return
+
+        # Replace the decision for this tied group. Priority 0 wins the tie;
+        # the remaining bowlers retain the normal score/name fallback order.
+        placeholders = ",".join("?" for _ in tied)
+        self.conn.execute(
+            f"DELETE FROM qualifying_tiebreaks WHERE division = ? AND bowler_id IN ({placeholders})",
+            [division, *tied],
+        )
+        self.conn.execute(
+            "INSERT INTO qualifying_tiebreaks(division, bowler_id, priority) VALUES(?, ?, 0)",
+            (division, winner_id),
+        )
+        for bowler_id in tied:
+            if bowler_id != winner_id:
+                self.conn.execute(
+                    "INSERT INTO qualifying_tiebreaks(division, bowler_id, priority) VALUES(?, ?, 1)",
+                    (division, bowler_id),
+                )
+        self.conn.commit()
+
+    def clear_qualifying_tiebreak_for_bowler(self, bowler_id):
+        self.conn.execute(
+            "DELETE FROM qualifying_tiebreaks WHERE bowler_id = ?",
+            (bowler_id,),
+        )
+        self.conn.commit()
+
     def qualifying_rows(self, division):
         games = self.qualifying_games
         rows = []
@@ -539,9 +618,11 @@ class TournamentDB:
                 "_reverse_games": reverse_games,
             })
 
+        tie_priorities = self.qualifying_tiebreak_priorities(division)
         rows.sort(
             key=lambda r: (
                 -r["total"],
+                tie_priorities.get(r["bowler_id"], 999),
                 tuple(-x for x in r["_reverse_games"]),
                 r["last_name"].casefold(),
                 r["first_name"].casefold(),
@@ -1410,7 +1491,7 @@ class TournamentApp(tk.Tk):
 
         headers = ["Rank", "Bowler"]
         headers += [f"G{i}" for i in range(1, games + 1)]
-        headers += ["Total", "Avg", "Cut"]
+        headers += ["Total", "Avg", "Cut", "Tie"]
 
         for col, title in enumerate(headers):
             ttk.Label(
@@ -1422,6 +1503,12 @@ class TournamentApp(tk.Tk):
             ).grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
 
         entry_order = []
+
+        tied_by_total = {}
+        for candidate in rows:
+            if candidate["complete"]:
+                tied_by_total.setdefault(candidate["total"], []).append(candidate["bowler_id"])
+        tied_by_total = {total: ids for total, ids in tied_by_total.items() if len(ids) > 1}
 
         for r_idx, row in enumerate(rows, start=1):
             ttk.Label(
@@ -1464,6 +1551,7 @@ class TournamentApp(tk.Tk):
             total_col = 2 + games
             avg_col = 3 + games
             cut_col = 4 + games
+            tie_col = 5 + games
 
             total_label = ttk.Label(
                 grid,
@@ -1501,6 +1589,20 @@ class TournamentApp(tk.Tk):
             cut_label.grid(
                 row=r_idx, column=cut_col, sticky="nsew", padx=1, pady=1
             )
+
+            tie_ids = tied_by_total.get(row["total"], [])
+            if row["complete"] and tie_ids:
+                ttk.Button(
+                    grid,
+                    text="Declare Winner",
+                    command=lambda bid=row["bowler_id"], ids=tuple(tie_ids), total=row["total"]: self.declare_qualifying_tie_winner(
+                        division, bid, ids, total
+                    ),
+                ).grid(row=r_idx, column=tie_col, sticky="nsew", padx=1, pady=1)
+            else:
+                ttk.Label(grid, text="").grid(
+                    row=r_idx, column=tie_col, sticky="nsew", padx=1, pady=1
+                )
 
             self.qualifying_labels[row["bowler_id"]] = (
                 total_label, avg_label, cut_label
@@ -1541,6 +1643,24 @@ class TournamentApp(tk.Tk):
                 f"{games} qualifying games"
             )
         )
+
+    def declare_qualifying_tie_winner(self, division, bowler_id, tied_ids, total):
+        name = self.db.display_name(bowler_id)
+        others = [self.db.display_name(bid) for bid in tied_ids if bid != bowler_id]
+        if not messagebox.askyesno(
+            "Resolve Qualifying Tie",
+            f"Declare {name} ahead of the other bowler(s) tied at {total} pins?\n\n"
+            + "Tied with: " + ", ".join(others),
+            parent=self,
+        ):
+            return
+        try:
+            self.db.set_qualifying_tie_winner(division, bowler_id, tied_ids)
+        except ValueError as exc:
+            messagebox.showerror("Could Not Resolve Tie", str(exc), parent=self)
+            return
+        self.refresh_qualifying()
+        self.refresh_summary()
 
     def _save_single_qualifying_cell(self, key):
         bowler_id, game_no = key
@@ -1861,7 +1981,7 @@ class TournamentApp(tk.Tk):
         ):
             ttk.Label(
                 box,
-                text="Tie — choose the tiebreak winner:",
+                text="Tie — declare the match winner:",
             ).pack(anchor="w", pady=(6, 2))
 
             tie_buttons = ttk.Frame(box)
@@ -1869,7 +1989,7 @@ class TournamentApp(tk.Tk):
 
             ttk.Button(
                 tie_buttons,
-                text=self.db.display_name(p1),
+                text=f"Declare {self.db.display_name(p1)} Winner",
                 command=lambda: self.advance_tie_winner(
                     division, round_index, match_index, p1
                 ),
@@ -1877,7 +1997,7 @@ class TournamentApp(tk.Tk):
 
             ttk.Button(
                 tie_buttons,
-                text=self.db.display_name(p2),
+                text=f"Declare {self.db.display_name(p2)} Winner",
                 command=lambda: self.advance_tie_winner(
                     division, round_index, match_index, p2
                 ),
