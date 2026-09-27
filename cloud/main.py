@@ -676,6 +676,10 @@ def init_portal_db():
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS portal_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         """)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(public_tournaments)").fetchall()}
         if "jr_gold_updated_at" not in cols:
@@ -1240,6 +1244,65 @@ def match_play_division(division_slug: str):
     return _page(f"{division} Match Play",body)
 
 
+def _boy_period_start(conn):
+    row = conn.execute("SELECT value FROM portal_settings WHERE key='boy_standings_start_at'").fetchone()
+    return row["value"] if row else None
+
+
+def _boy_division_rows(conn, division: str):
+    """Calculate BOY totals with exactly one dropped tournament.
+
+    Every archived tournament in the current BOY period counts as an event.
+    Missing an event contributes 0 points, and the single lowest event value
+    (including a 0 for an absence) is always dropped.
+    """
+    start = _boy_period_start(conn)
+    if start:
+        tournaments = conn.execute(
+            "SELECT tournament_id FROM public_tournaments WHERE archived_at IS NOT NULL AND archived_at>=? ORDER BY archived_at,event_date,tournament_id",
+            (start,),
+        ).fetchall()
+    else:
+        tournaments = conn.execute(
+            "SELECT tournament_id FROM public_tournaments WHERE archived_at IS NOT NULL ORDER BY archived_at,event_date,tournament_id"
+        ).fetchall()
+    tids = [r["tournament_id"] for r in tournaments]
+    if not tids:
+        return []
+    placeholders = ",".join("?" for _ in tids)
+    perf = conn.execute(
+        f"SELECT tournament_id,bowler_id,first_name,last_name,qualifying_total,qualifying_average,high_game,match_wins,COALESCE(boy_points,0) boy_points "
+        f"FROM tournament_performance WHERE division=? AND tournament_id IN ({placeholders})",
+        (division, *tids),
+    ).fetchall()
+    people = {}
+    for r in perf:
+        key = r["bowler_id"] or (str(r["first_name"]).casefold(), str(r["last_name"]).casefold())
+        d = people.setdefault(key, {
+            "bowler_id": r["bowler_id"], "first_name": r["first_name"], "last_name": r["last_name"],
+            "events": 0, "pins": 0, "wins": 0, "high_game": None, "avgs": [], "points_by_tid": {}
+        })
+        d["events"] += 1
+        d["pins"] += int(r["qualifying_total"] or 0)
+        d["wins"] += int(r["match_wins"] or 0)
+        if r["high_game"] is not None:
+            hg = int(r["high_game"]); d["high_game"] = hg if d["high_game"] is None else max(d["high_game"], hg)
+        if r["qualifying_average"] is not None:
+            d["avgs"].append(float(r["qualifying_average"]))
+        d["points_by_tid"][r["tournament_id"]] = float(r["boy_points"] or 0)
+    out=[]
+    for d in people.values():
+        event_points=[float(d["points_by_tid"].get(tid,0)) for tid in tids]
+        dropped=min(event_points) if event_points else 0
+        total=sum(event_points)-dropped if event_points else 0
+        d["points"]=total
+        d["dropped_points"]=dropped
+        d["avg"]=(sum(d["avgs"])/len(d["avgs"])) if d["avgs"] else None
+        out.append(d)
+    out.sort(key=lambda r: (-r["points"], -(r["avg"] if r["avg"] is not None else -1), str(r["last_name"]).casefold(), str(r["first_name"]).casefold()))
+    return out
+
+
 @app.get("/bowler-of-the-year", response_class=HTMLResponse)
 def boy_index():
     tiles = "".join(f"<a class='tile' href='/bowler-of-the-year/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
@@ -1252,12 +1315,12 @@ def boy_division(division_slug: str):
     if not division:
         raise HTTPException(status_code=404, detail="Division not found")
     with db() as conn:
-        rows = conn.execute("SELECT bowler_id,first_name,last_name,COUNT(*) tournaments,SUM(qualifying_total) pins,SUM(match_wins) wins,MAX(high_game) high_game,AVG(qualifying_average) avg,COALESCE(SUM(boy_points),0) points FROM tournament_performance WHERE division=? GROUP BY COALESCE(bowler_id,first_name||'|'||last_name),first_name,last_name ORDER BY points DESC,avg DESC,last_name,first_name", (division,)).fetchall()
+        rows = _boy_division_rows(conn, division)
     tr_parts = []
     for i, r in enumerate(rows, 1):
         avg_text = "—" if r["avg"] is None else f"{r['avg']:.2f}"
         points_text = str(int(r["points"] or 0))
-        tr_parts.append(f"<tr><td>{i}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{r['tournaments']}</td><td>{avg_text}</td><td>{r['high_game'] or '—'}</td><td>{r['wins']}</td><td>{points_text}</td></tr>")
+        tr_parts.append(f"<tr><td>{i}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{r['events']}</td><td>{avg_text}</td><td>{r['high_game'] or '—'}</td><td>{r['wins']}</td><td>{points_text}</td></tr>")
     trs = "".join(tr_parts)
     table = "<p>No archived performances yet.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>#</th><th>Bowler</th><th>Events</th><th>Qual. Avg.</th><th>High</th><th>Match Wins</th><th>BOY Points</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
     return _page(f"{division} Bowler of the Year", f"<p><a href='/bowler-of-the-year'>← Divisions</a></p><h2>{html.escape(division)} — Bowler of the Year</h2>{table}")
@@ -1479,7 +1542,8 @@ def admin_page(request:Request):
     with db() as conn: tournaments=conn.execute("SELECT tournament_id,name,event_date FROM public_tournaments WHERE archived_at IS NOT NULL ORDER BY event_date DESC").fetchall()
     rows=''.join(f"<tr><td>{html.escape(t['event_date'])}</td><td>{html.escape(t['name'])}</td><td><form method='post' action='/admin/archive/{html.escape(t['tournament_id'])}/delete' onsubmit=\"return confirm('Permanently remove this tournament from the archive?')\"><button class='danger' type='submit'>Remove</button></form></td></tr>" for t in tournaments)
     table="<p>No archived tournaments.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>Date</th><th>Tournament</th><th>Action</th></tr></thead><tbody>"+rows+"</tbody></table></div>"
-    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2><h3>Archived Tournaments</h3>{table}")
+    boy_reset = '''<h3>Bowler of the Year</h3><p class='muted'>Start a new BOY standings period without deleting archived tournaments or historical performances.</p><form method='post' action='/admin/boy/clear' onsubmit="return confirm('Clear the current Bowler of the Year standings? Archived tournaments will be kept.');"><button class='danger' type='submit'>Clear Bowler of the Year Standings</button></form>'''
+    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2>{boy_reset}<h3>Archived Tournaments</h3>{table}")
 
 
 @app.post('/admin/login')
@@ -1498,6 +1562,17 @@ def admin_logout(request:Request):
     if token:
         with db() as conn: conn.execute("DELETE FROM web_admin_sessions WHERE token=?",(token,))
     response=RedirectResponse('/admin',status_code=303); response.delete_cookie('toughshots_admin'); return response
+
+
+@app.post('/admin/boy/clear')
+def admin_clear_boy(request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO portal_settings(key,value) VALUES('boy_standings_start_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (now_iso(),),
+        )
+    return RedirectResponse('/admin',status_code=303)
 
 
 @app.post('/admin/archive/{tournament_id}/delete')
