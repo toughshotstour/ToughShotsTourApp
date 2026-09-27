@@ -56,6 +56,8 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+from core.theme import load_theme_name, apply_theme
+
 
 APP_TITLE = "Bowling Tournament Manager"
 DEFAULT_QUALIFYING_GAMES = 6
@@ -1106,6 +1108,7 @@ class TournamentApp(tk.Tk):
         self.title(APP_TITLE)
         self.geometry("1380x850")
         self.minsize(1050, 650)
+        apply_theme(self, load_theme_name(), suite_styles=False)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -1915,31 +1918,48 @@ class TournamentApp(tk.Tk):
             justify="center",
             state="normal" if bowler_id else "disabled",
         )
-        entry.pack(side="right")
+        entry.pack(side="right", padx=(4, 0))
 
         self.match_score_vars.append(var)
+        last_saved = {"value": "" if score is None else str(score)}
 
-        def save_match_score(event=None):
+        def save_match_score(event=None, *, refresh=True):
+            raw = var.get().strip()
+            if raw == last_saved["value"]:
+                return "break" if event is not None else None
             try:
                 self.db.set_match_score(
                     division,
                     round_index,
                     match_index,
                     slot,
-                    var.get().strip(),
+                    raw,
                 )
+                last_saved["value"] = raw
             except ValueError as exc:
                 messagebox.showerror(
                     "Invalid Match Score", str(exc), parent=self
                 )
+                try:
+                    entry.focus_set()
+                    entry.selection_range(0, "end")
+                except Exception:
+                    pass
                 return "break"
 
-            self.refresh_match_play()
             self.refresh_summary()
+            if refresh:
+                self.refresh_match_play()
             return "break"
 
-        entry.bind("<Return>", save_match_score)
-        entry.bind("<FocusOut>", lambda e: None)
+        # Scores now save on Enter, by clicking Save, or simply by tabbing/clicking
+        # out of the field. This removes the old requirement to remember Enter.
+        ttk.Button(
+            row, text="Save", width=6,
+            command=lambda: save_match_score(refresh=True),
+        ).pack(side="right", padx=(6, 0))
+        entry.bind("<Return>", lambda e: save_match_score(e, refresh=True))
+        entry.bind("<FocusOut>", lambda e: save_match_score(e, refresh=False))
 
     def advance_tie_winner(
         self, division, round_index, match_index, bowler_id
@@ -2399,26 +2419,22 @@ class TournamentApp(tk.Tk):
         )
         games_spin.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=6)
 
-        ttk.Label(body, text="Print title:").grid(row=1, column=0, sticky="w", pady=6)
-        print_title_var = tk.StringVar(value=self.db.get_meta("print_title", ""))
-        ttk.Entry(body, textvariable=print_title_var, width=42).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=6)
-
         ttk.Label(
             body,
             text=(
                 "Changing the number of games does not erase stored scores. "
                 "Games above the current setting are simply ignored until "
-                "you increase it again."
+                "you increase it again. Printed forms automatically use the "
+                "Tournament Name from the main Tough Shots application."
             ),
             wraplength=430,
         ).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(0, 12)
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
 
         def save():
             try:
                 self.db.qualifying_games = int(games_var.get())
-                self.db.set_meta("print_title", print_title_var.get().strip())
             except ValueError as exc:
                 messagebox.showerror("Invalid Setting", str(exc), parent=win)
                 return
@@ -2430,7 +2446,7 @@ class TournamentApp(tk.Tk):
             body,
             text="Save",
             command=save,
-        ).grid(row=3, column=1, sticky="e", pady=(8, 0))
+        ).grid(row=2, column=1, sticky="e", pady=(8, 0))
 
         ttk.Button(
             body,
@@ -2514,6 +2530,7 @@ def main():
     args = parser.parse_args()
 
     hidden_root = tk.Tk()
+    apply_theme(hidden_root, load_theme_name(), suite_styles=False)
     hidden_root.withdraw()
 
     roster_path = args.roster

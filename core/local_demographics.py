@@ -252,6 +252,67 @@ def update_from_csv(workspace, source_csv):
     return {"created": inserted, "updated": updated, "skipped": skipped, "database": str(database_path(workspace)), "snapshot": str(snapshot_path(workspace))}
 
 
+
+def preview_csv_update(workspace, source_csv):
+    """Preview demographic import and flag identity-sensitive rows for operator confirmation.
+
+    Normal refreshes (same normalized name + DOB) are not flagged. A row is
+    questionable when it appears to collide with an existing bowler by USBC ID
+    or name but does not have the same stable identity.
+    """
+    source_csv = Path(source_csv).expanduser()
+    first_col, last_col, birth_col, gender_col, usbc_col, email_col = _columns(source_csv)
+    conn = _connect(workspace)
+    questionable = []
+    created = updated = skipped = 0
+    try:
+        with source_csv.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row_no, row in enumerate(reader, start=2):
+                first = proper_name(row.get(first_col))
+                last = proper_name(row.get(last_col))
+                birth_raw = str(row.get(birth_col) or "").strip()
+                usbc = str(row.get(usbc_col) or "").strip() if usbc_col else ""
+                if not first or not last or not birth_raw:
+                    skipped += 1
+                    continue
+                try:
+                    birth = normalize_birthdate(birth_raw)
+                except ValueError:
+                    birth = birth_raw
+                exact = conn.execute(
+                    "SELECT * FROM demographics WHERE lower(first_name)=? AND lower(last_name)=? AND birthdate=? LIMIT 1",
+                    (first.casefold(), last.casefold(), birth),
+                ).fetchone()
+                if exact:
+                    updated += 1
+                    old_usbc = _digits(exact["usbc_id"])
+                    new_usbc = _digits(usbc)
+                    if old_usbc and new_usbc and old_usbc != new_usbc:
+                        questionable.append({"row": row_no, "name": f"{first} {last}", "reason": f"USBC ID would change from {exact['usbc_id']} to {usbc}"})
+                    continue
+                created += 1
+                collisions = []
+                usbc_digits = _digits(usbc)
+                if usbc_digits:
+                    collisions += conn.execute("SELECT * FROM demographics WHERE replace(replace(usbc_id,'-',''),' ','')=?", (usbc_digits,)).fetchall()
+                collisions += conn.execute(
+                    "SELECT * FROM demographics WHERE lower(first_name)=? AND lower(last_name)=?",
+                    (first.casefold(), last.casefold()),
+                ).fetchall()
+                seen = set()
+                unique = []
+                for c in collisions:
+                    key = c["identity_key"]
+                    if key not in seen:
+                        seen.add(key); unique.append(c)
+                if unique:
+                    names = ", ".join(f"{r['first_name']} {r['last_name']} ({r['birthdate']})" for r in unique[:3])
+                    questionable.append({"row": row_no, "name": f"{first} {last}", "reason": f"possible existing bowler match: {names}"})
+    finally:
+        conn.close()
+    return {"created": created, "updated": updated, "skipped": skipped, "questionable": questionable}
+
 def list_local_bowlers(workspace, search=""):
     conn = _connect(workspace)
     try:

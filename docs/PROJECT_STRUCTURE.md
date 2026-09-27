@@ -1,16 +1,15 @@
 # Project Structure
 
-The project is organized so local tournament operations, reusable processing logic, the Tournament Manager, and the Render service are easy to find without changing the normal launch workflow.
-
 ```text
 ToughShotsApp/
-├── app.py
+├── app.py                    # desktop launcher
 ├── desktop/
-│   └── app.py
+│   └── app.py                # six-page desktop workflow
 ├── core/
 │   ├── import_archive.py
 │   ├── lane_scoring.py
 │   ├── local_demographics.py
+│   ├── printing.py
 │   └── results_portal.py
 ├── processors/
 │   ├── payment_check.py
@@ -22,33 +21,53 @@ ToughShotsApp/
 │   ├── main.py
 │   └── requirements.txt
 ├── docs/
-│   ├── CLOUD_MOBILE_SETUP.md
-│   ├── PUBLIC_RESULTS_SETUP.md
-│   └── PROJECT_STRUCTURE.md
 ├── render.yaml
 ├── requirements.txt
 ├── run_app.bat
 └── run_app.command
 ```
 
-## Runtime data
+## Runtime workspace
 
-Tournament data is not source code and stays under `TournamentWorkspace/` at runtime. The active Tournament Manager database remains beside `tournament_divisions/all_divisions.csv`. Completed tournaments moved by the reset function are retained under `TournamentWorkspace/completed_tournaments/`.
+Tournament data remains separate from source code:
 
-## Reloading an active tournament
+```text
+TournamentWorkspace/
+├── local_demographics.sqlite3
+├── demographic_master.csv
+├── tournament_inputs/
+│   ├── tournament_registration.csv
+│   └── square_transactions.csv
+├── imported_files/
+├── payment_status.csv
+├── duplicate_review.csv
+├── paid_demographic_check.csv
+├── tournament_divisions/
+│   ├── all_divisions.csv
+│   ├── *_tournament.sqlite3
+│   └── needs_review.csv
+├── lane_scoring/
+└── completed_tournaments/
+```
 
-Use **4 Tournament → Reload Tournament from Workspace** after reopening the desktop suite. It resumes the SQLite tournament database directly, so qualifying scores, cuts, Jr. Gold settings, seeding, bracket state, and match-play results are retained.
+`tournament_inputs/` contains the authoritative registration and Square copies for the active event. After files are imported, downstream tournament processing does not use the original source paths.
 
-## Managing the local bowler database
+## Six-page desktop layout
 
-Open **2 — Bowler Database** and choose **Manage Local Bowlers** to search, add, edit, or remove local records. Changes are written to both `local_demographics.sqlite3` and `demographic_master.csv`. The generated 10-digit Bowler ID is intentionally read-only so archived results remain linked to the same person. Jr. Gold state and manual division overrides can be edited here; the permanent-bowler sync carries those values to the private cloud database.
+1. Connect to Website
+2. Bowler Database
+3. Tournament Files
+4. Tournament Setup
+5. Tournament Manager
+6. Public Site
 
-## Printing
+## Active-tournament resume
 
-The desktop suite has a shared **Print title** setting in the **Print Center**. The value is saved with the active workspace and passed into Tournament Manager. It appears at the top of lane score sheets, qualifying score pages, and match-play bracket pages.
+**Open Tournament Manager** automatically resumes the saved SQLite tournament database when one exists. This retains qualifying scores, cuts, Jr. Gold settings, seeding, brackets, and match-play results after the Tournament Manager window is closed.
 
-Tournament Manager includes:
-- **Print Qualifying Page** on the Qualifying tab for the selected division.
-- **Print Current Match Play Round** in the main app Print Center. It prints divisions by relative round number, so first-round brackets print together even if one cut is 8 and another is 16. For example, while any divisions are still in the Round of 16, Round-of-8 divisions are skipped. Each selected division uses four matches (8 bowlers) per page, with 4- or 2-bowler sheets as later rounds shrink.
+## Reset behavior
 
-Generated forms are saved beside the tournament database under `printed_forms/` before being sent to the default printer. If direct printing is unavailable, the PDF is opened/saved for manual printing.
+After the event is archived, **Reset for Next Tournament** moves active tournament-specific files—including `tournament_inputs/`, division outputs, Tournament Manager database, and lane-scoring files—under `completed_tournaments/`. The reusable master bowler database and imported-source archive remain in place.
+
+## Desktop themes
+The desktop suite includes a persistent Theme selector in the sidebar with four choices: Light, Slate Dark, Charcoal + Red, and Midnight Blue. The selection is stored as a user-interface preference and is also read by Tournament Manager when it opens.

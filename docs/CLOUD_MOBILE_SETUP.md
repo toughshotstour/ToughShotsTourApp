@@ -47,7 +47,7 @@ Useful official references:
 
 Run the normal Tough Shots preparation pipeline and create `all_divisions.csv`.
 
-On **5  Lanes + Mobile**:
+On **5 Tournament Manager**:
 
 1. Confirm the tournament roster.
 2. Enter a tournament name.
@@ -81,7 +81,7 @@ Each page contains:
 - sequential position letters across each pair, with the first half on the odd lane and the remainder on the even lane;
 - the public Tough Shots site URL directly below the competitor rows.
 
-Before scoring, use **Manage Scorer PINs** on the desktop Lanes + Mobile page to add each authorized scorer. You choose a private six-digit PIN for each scorer. PINs must be unique. A scorer scans the lane-pair QR code with a phone camera, enters their PIN the first time, and then sees both lanes on that sheet with six score fields per bowler. Their phone remains signed in for up to 12 hours unless they sign out or you set a new PIN for them. Scorecards do not lock after submission; authorized scorers can make corrections later.
+Before scoring, use **Manage Scorer PINs** on the desktop Tournament Manager page to add each authorized scorer. You choose a private six-digit PIN for each scorer. PINs must be unique. A scorer scans the lane-pair QR code with a phone camera, enters their PIN the first time, and then sees both lanes on that sheet with six score fields per bowler. Their phone remains signed in for up to 12 hours unless they sign out or you set a new PIN for them. Scorecards do not lock after submission; authorized scorers can make corrections later.
 
 The QR code contains a long random lane-pair token, not the cloud admin key. The QR identifies which two lanes to open, but a valid scorer PIN is still required before anyone can edit scores.
 
@@ -95,7 +95,7 @@ Every changed score is also written to a cloud audit table with the old score, n
 
 ## 7. Bring mobile scores into the Tournament Manager
 
-On **5  Lanes + Mobile**, click **Sync Mobile Scores**, or enable:
+On **5 Tournament Manager**, click **Sync Mobile Scores**, or enable:
 
 **Auto-sync cloud scores into the Tournament Manager database every 15 seconds**
 

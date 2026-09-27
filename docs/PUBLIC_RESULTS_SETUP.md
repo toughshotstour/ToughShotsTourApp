@@ -14,9 +14,9 @@ Existing scorer PINs, lane data, and score audit information remain in the exist
 
 ## Permanent bowler database
 
-Open **6 Bowlers + Results** in the desktop application.
+Open **6 Public Site** in the desktop application.
 
-First update the reusable local demographic database in **1 Bowler Database** whenever you receive a newer demographic export. On **6 Bowlers + Results**, click **Sync Permanent Bowlers from Local DB** to push that private local demographic snapshot to the permanent cloud bowler database.
+First update the reusable local demographic database in **2 Bowler Database** whenever you receive a newer demographic export. On **6 Public Site**, click **Sync Permanent Bowlers from Local Database** to push that private local demographic snapshot to the permanent cloud bowler database.
 
 The importer looks for:
 - Bowlers First Name (or a common First Name variation)
@@ -79,7 +79,7 @@ The Bowler-of-the-Year pages already aggregate event count, qualifying average, 
 
 ## Event date
 
-On **6 Bowlers + Results**, set Event date as `YYYY-MM-DD` before publishing/archiving, for example `2026-08-18`.
+On **6 Public Site**, set Event date as `YYYY-MM-DD` before publishing/archiving, for example `2026-08-18`.
 
 ## Privacy
 
@@ -128,4 +128,13 @@ Tournament Manager now keeps its existing division/list score-entry grid and add
 
 ## Reset after archiving
 
-After you have verified and archived a completed tournament, click **Reset for Next Tournament** on **6 Bowlers + Results**. Tournament-specific local outputs are moved into `TournamentWorkspace/completed_tournaments/<timestamp>_<event>/` rather than deleted. The reusable local demographic database, imported-file archive, permanent cloud bowlers, Jr. Gold states, scorer PINs, and Render archive remain intact.
+After you have verified and archived a completed tournament, click **Reset for Next Tournament** on **6 Public Site**. Tournament-specific local outputs are moved into `TournamentWorkspace/completed_tournaments/<timestamp>_<event>/` rather than deleted. The reusable local demographic database, imported-file archive, permanent cloud bowlers, Jr. Gold states, scorer PINs, and Render archive remain intact.
+
+
+## Website themes, admin controls, and archived snapshots
+
+The public website now has the same four theme choices as the desktop app: Light, Slate Dark, Charcoal + Red, and Midnight Blue. The visitor's selection is saved in that browser.
+
+Use **Manage PINs** in the desktop Tournament Manager page to set the separate six-digit Website Admin PIN. The **Admin Controls** button on the desktop Website page opens the protected web admin page, where archived tournaments can be removed. This PIN is separate from the Render admin key.
+
+Archived tournaments retain a snapshot of the published Qualifying, Jr. Gold Qualifying, Match Play, and Lane Assignments data. Clearing Current Tournament does not remove archived snapshots.

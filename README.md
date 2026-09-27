@@ -1,16 +1,103 @@
 # Tough Shots Tournament Suite
 
-A guided desktop application for tournament preparation, division creation, bowling qualifying, match play, lane assignment, printable score sheets, and cloud/mobile QR score entry.
+A desktop tournament-operations application plus a Render-hosted public/mobile scoring service for Tough Shots bowling events.
 
-## Main workflow
+## Desktop workflow
 
-1. **Local Master Bowler Database** - demographic exports are used only to create/update this database; all tournament workflows read demographic information from the database itself.
-2. **Tournament Prep / Payment Check** - reconcile registrations against completed Square payments and check current entries against the master database.
-3. **Division Builder** - create the tournament division rosters.
-4. **Tournament Manager** - six-game qualifying, cuts, seeding, match play, brackets, autosave, and exports.
-5. **Lanes + Mobile** - randomly balance all bowlers across available lanes, publish lane-pair mobile scoring pages, manage individual scorer PINs, generate QR-coded paper score sheets, and sync phone-entered qualifying scores back to the Tournament Manager database.
+The main application is organized into six pages:
 
-The original preparation scripts remain available and the existing Tournament Manager is still the source of truth for tournament scoring/brackets.
+1. **Connect to Website** — enter the Render website URL and private admin key. Use **Test Website Connection** to verify the credentials.
+2. **Bowler Database** — import a demographic form to update the reusable local master database, download/merge the private website database, manage local bowlers, sync permanent bowlers to Render, and manage Jr. Gold status.
+3. **Tournament Files** — choose the tournament registration and Square transaction exports and click **Import Tournament Files to Workspace**. The app preserves the originals and makes fixed local copies under `TournamentWorkspace/tournament_inputs/`.
+4. **Tournament Setup** — run the full setup, review payment/demographic/division errors, edit the local registration copy, then create lane groups, build/edit the lane assignment, and generate QR score sheets.
+5. **Tournament Manager** — open/resume Tournament Manager, manage the active tournament roster, edit Jr. Gold settings, manage/sync mobile scoring, and use the consolidated Print Center.
+6. **Public Site** — publish qualifying, Jr. Gold, and match-play data; open the public site; archive the finished event; clear the live Current Tournament section; and reset the local workspace for the next event.
+
+The local master bowler database is the demographic source of truth. The demographic CSV is only an import/update source.
+
+## Tournament file safety
+
+After **3 Tournament Files → Import Tournament Files to Workspace**, all tournament setup uses these files:
+
+```text
+TournamentWorkspace/
+└── tournament_inputs/
+    ├── tournament_registration.csv
+    └── square_transactions.csv
+```
+
+The original downloaded file paths are no longer used by payment checking, demographic matching, or division creation. This means moving or deleting the original downloads after import will not break the active tournament.
+
+Every imported source is also preserved under `TournamentWorkspace/imported_files/` with a timestamped manifest and SHA-256 hashes.
+
+## Setup review files
+
+**4 Tournament Setup** provides direct access to the main review outputs:
+
+```text
+TournamentWorkspace/
+├── payment_status.csv
+├── duplicate_review.csv
+├── paid_demographic_check.csv
+└── tournament_divisions/
+    └── needs_review.csv
+```
+
+The local registration editor can search by bowler name, sort by first or last name, and pull rows associated with current review/error outputs to the top. Edits are made to the workspace copy, not to the original downloaded registration file. Rerun **Setup Tournament** after correcting the registration.
+
+## Resume a tournament
+
+Tournament Manager saves qualifying, Jr. Gold settings, seeding, brackets, and match play to SQLite. If Tournament Manager is closed accidentally, reopen the Tough Shots suite and click **Open Tournament Manager**. If the active tournament database already exists, the app automatically resumes it instead of rebuilding it.
+
+## Lane assignment and mobile scoring
+
+Lane-pair assignment balances scorecards as evenly as practical while keeping divisions together by default. Optional Lane Groups can force selected bowlers onto the same pair. Once an assignment exists, **Build / Edit Lane Assignment** reopens that saved assignment instead of resetting it.
+
+Generating score sheets creates/publishes the same lane assignment used by mobile scoring and the public lane-assignment page.
+
+```text
+TournamentWorkspace/
+└── lane_scoring/
+    ├── lane_assignments.csv
+    ├── lane_manifest.json
+    └── lane_scoresheets.pdf
+```
+
+## Printing
+
+The Print Center is on **5 Tournament Manager** and contains:
+
+- Qualifying — all divisions
+- Jr. Gold qualifying
+- Current match-play round
+
+The Tournament Name is used automatically as the title on printed standings, bracket forms, and lane score sheets. Printed qualifying/Jr. Gold standings follow the same table structure as the website, including the blank cut separator and high-game/high-3 summary.
+
+## Public website
+
+The Render site includes Current Tournament, Bowler of the Year, and Tournament Archive sections. Current Tournament contains Qualifying, Jr. Gold Qualifying, Match Play, and Lane Assignments.
+
+See:
+
+- `docs/CLOUD_MOBILE_SETUP.md`
+- `docs/PUBLIC_RESULTS_SETUP.md`
+
+## Project layout
+
+```text
+ToughShotsApp/
+├── app.py
+├── desktop/
+├── core/
+├── processors/
+├── tournament/
+├── cloud/
+├── docs/
+├── render.yaml
+├── requirements.txt
+├── run_app.bat
+└── run_app.command
+```
 
 ## Start the application
 
@@ -24,150 +111,12 @@ python app.py
 
 ### macOS / Linux
 
-Run:
-
 ```bash
 ./run_app.command
 ```
 
-or:
-
-```bash
-python3 app.py
-```
-
-## Install desktop dependencies
+## Install dependencies
 
 ```bash
 python -m pip install -r requirements.txt
 ```
-
-Tkinter is included with standard Python installations on Windows and macOS. Some Linux distributions package Tkinter separately.
-
-## Cloud/mobile scoring
-
-See **[docs/CLOUD_MOBILE_SETUP.md](docs/CLOUD_MOBILE_SETUP.md)** for the deployment and event-day instructions.
-
-The included cloud service is a FastAPI application in `cloud/`, and `render.yaml` is provided to make deployment as small as possible.
-
-## Lane assignment behavior
-
-Lane assignment balances the **lane-pair scorecards first**, so pair totals differ by no more than one bowler unless an explicit same-pair group makes that impossible. It keeps bowlers from the same division together as much as practical. Use **Lane Groups** to assign a shared group ID to bowlers who must remain on the same pair, then use **Review / Move Bowlers** for individual lane changes before generating the score sheets.
-
-Preparing lane assignment creates the manifest/CSV and publishes mobile scoring. After reviewing the draw, **Generate Score Sheets** creates the PDF:
-
-```text
-TournamentWorkspace/
-└── lane_scoring/
-    ├── lane_assignments.csv
-    ├── lane_manifest.json
-    └── lane_scoresheets.pdf
-```
-
-The PDF has one landscape page per lane pair, names pre-filled in a compact bowling-sheet grid, six game columns, a total column, and one shared QR code that opens both lanes on the mobile scoring page. Position letters run sequentially across the pair: the odd lane receives the first half rounded up and the even lane receives the remaining letters. The public results URL is printed immediately below the competitor table. Scorers authenticate with individual six-digit PINs; scores remain editable and changes are audit-attributed.
-
-
-
-## Resume a saved tournament
-
-Tournament Manager scores, cuts, Jr. Gold settings, seeds, brackets, and match-play state are stored in the active workspace SQLite database. If you accidentally close Tournament Manager, reopen the desktop suite and go to **4 Tournament → Reload Tournament from Workspace**. The suite detects the active `all_divisions.csv`, its saved tournament database, lane manifest, lane score sheets, event name, and lane count, then opens the manager directly in resume mode.
-
-The reload button resumes only the **active** workspace. Tournaments moved by **Reset for Next Tournament** remain preserved under `TournamentWorkspace/completed_tournaments/`.
-
-## Project layout
-
-The source tree is organized by responsibility:
-
-```text
-ToughShotsApp/
-├── app.py                    # desktop launcher
-├── desktop/                  # desktop suite UI
-├── core/                     # lane scoring, demographics, archive, cloud publishing helpers
-├── processors/               # payment, demographic matching, and division scripts
-├── tournament/               # Tournament Manager and local SQLite scoring logic
-├── cloud/                    # Render/FastAPI service
-├── docs/                     # setup and workflow documentation
-├── render.yaml               # Render Blueprint
-├── requirements.txt
-├── run_app.bat
-└── run_app.command
-```
-
-## Automatic copies of imported files
-
-Whenever a desktop workflow consumes a file, the app first preserves an untouched copy in the selected tournament workspace. This applies to payment checking, demographic matching, division building, lane assignment, and opening a roster in the Tournament Manager. A full prep run archives the registration, Square export, and the local demographic snapshot that was actually used for matching.
-
-Each run creates a timestamped folder such as:
-
-```text
-TournamentWorkspace/
-└── imported_files/
-    └── 2026-08-17_213945_full_prep_pipeline/
-        ├── tournament_registration__registrations.csv
-        ├── square_transactions__transactions.csv
-        ├── demographic_form__demographics.csv
-        └── import_manifest.json
-```
-
-`import_manifest.json` records the original path, file size, and SHA-256 hash of every preserved input. The app stops the requested operation if it cannot make the archive copy, so a file is never processed silently without the backup being created. Use **Open Imported Files** on the Tournament Prep page to open this archive quickly.
-
-## Existing prep workspace
-
-A full preparation run still creates files similar to:
-
-```text
-TournamentWorkspace/
-├── payment_status.csv
-├── duplicate_review.csv
-├── paid_demographic_check.csv
-└── tournament_divisions/
-    ├── all_divisions.csv
-    ├── U12_Mixed.csv
-    ├── U14_Boys.csv
-    ├── U14_Girls.csv
-    ├── U16_Boys.csv
-    ├── U16_Girls.csv
-    ├── U18_Boys.csv
-    ├── U18_Girls.csv
-    └── needs_review.csv
-```
-
-The Tournament Manager stores its local SQLite database next to `all_divisions.csv` by default. Mobile score synchronization writes into that same database.
-
-
-## Permanent bowlers and public results
-
-The Render service now hosts a public Tough Shots landing page with **Current Tournament**, Bowler-of-the-Year, and Tournament Archive. Current Tournament contains separate seven-division Qualifying, Jr. Gold Qualifying, and Match Play pages. The desktop application's **6 Bowlers + Results** page manages the private permanent bowler database, Jr. Gold status, one-click qualifying publication, and end-of-tournament archive/season uploads. See `docs/PUBLIC_RESULTS_SETUP.md` for the workflow.
-
-### Added results features
-- Automatic Bowler-of-the-Year points: reverse qualifying placement points + 5 per match win + champion/runner-up bonuses.
-- Separate Jr. Gold qualifying standings for bowlers marked JG or Q, including independent cut lines and optional U14/U16/U18 boys+girls merges.
-- Qualifying score entry by lane in Tournament Manager, alongside the existing division list.
-
-
-## Reusable local demographics and tournament reset
-
-The demographic form is only an import/update source. In **2 Bowler Database**, import a new demographic export only when needed. The authoritative source is `local_demographics.sqlite3`; tournament entry checks, roster enrichment, division placement, Jr. Gold information, and permanent-bowler sync read directly from that database. `demographic_master.csv` is retained only as a convenient human-readable export.
-
-After a tournament has been published to the cloud archive, use **6 Bowlers + Results → Reset for Next Tournament**. The button moves the current payment, division, Tournament Manager database, and lane-scoring files into a timestamped `completed_tournaments` folder and clears the active tournament selections. It deliberately preserves `local_demographics.sqlite3`, `demographic_master.csv`, `imported_files`, cloud permanent bowlers/Jr. Gold states, scorer PINs, and the public archive.
-
-
-## Current tournament publishing
-
-The **Bowlers + Results** page can independently push Qualifying, Jr. Gold, and Match Play to the public website. Regular qualifying cut sizes default to the largest power-of-two bracket that does not exceed half the division field (for example, 15 bowlers → cut 4 and 16 bowlers → cut 8). Public qualifying pages show the cut line plus the division high game and high first-three-game set. **Clear Current Tournament from Website** removes live qualifying/Jr. Gold/match-play information without deleting archived tournaments or Bowler-of-the-Year history.
-
-
-## Print Center and live lane assignments
-
-The main desktop app now consolidates qualifying, Jr. Gold, and match-play printing under **6 Print Center**. Match-play printing groups divisions by relative round number: every division still in its first match-play round prints together even when their cut sizes differ. Generating lane score sheets also publishes the exact lane assignments to **Current Tournament > Lane Assignments**, sorted publicly by last name.
-
-## Current Tournament Roster Editing
-Use **Tournament → Manage Current Tournament Bowlers** to make event-specific roster changes at any point before or after lane assignment.
-
-- **Add from Master Database** adds a permanent bowler to only the active tournament.
-- **Remove from This Tournament** removes the entry without deleting the master bowler record.
-- **Edit Bowler** saves the correction to the local master bowler database and updates the active tournament copy.
-- Existing Tournament Manager qualifying scores are preserved when matching bowlers are edited.
-- Existing lane/mobile assignments are reconciled after roster changes; mobile republishing preserves already-entered scores.
-
-The public **Current Tournament → Lane Assignments** page now includes a bowler-name search box.

@@ -262,6 +262,38 @@ def api_delete_scorer(scorer_id: int, x_admin_key: str | None = Header(default=N
     return {"ok": True, "deleted": scorer_id}
 
 
+
+
+def web_admin_from_request(request: Request):
+    token = request.cookies.get("toughshots_admin")
+    if not token:
+        return False
+    with db() as conn:
+        conn.execute("DELETE FROM web_admin_sessions WHERE expires_at<=?", (now_iso(),))
+        row = conn.execute("SELECT token FROM web_admin_sessions WHERE token=? AND expires_at>?", (token, now_iso())).fetchone()
+    return bool(row)
+
+
+@app.get("/api/admin-pin")
+def api_admin_pin_status(x_admin_key: str | None = Header(default=None)):
+    require_admin(x_admin_key)
+    with db() as conn:
+        row = conn.execute("SELECT id FROM web_admin_pin WHERE id=1").fetchone()
+    return {"configured": bool(row)}
+
+
+@app.post("/api/admin-pin")
+async def api_set_admin_pin(request: Request, x_admin_key: str | None = Header(default=None)):
+    require_admin(x_admin_key)
+    payload = await request.json()
+    pin = validate_pin(str(payload.get("pin", "")))
+    salt = secrets.token_hex(16)
+    digest = pin_digest(pin, salt)
+    with db() as conn:
+        conn.execute("INSERT INTO web_admin_pin(id,pin_salt,pin_hash,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET pin_salt=excluded.pin_salt,pin_hash=excluded.pin_hash,updated_at=excluded.updated_at", (salt,digest,now_iso()))
+        conn.execute("DELETE FROM web_admin_sessions")
+    return {"ok": True, "configured": True}
+
 @app.post("/api/tournaments/publish")
 async def publish(request: Request, x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
@@ -633,6 +665,17 @@ def init_portal_db():
             PRIMARY KEY(tournament_id, lane_no, position_label, first_name, last_name),
             FOREIGN KEY(tournament_id) REFERENCES public_tournaments(tournament_id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS web_admin_pin (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            pin_salt TEXT NOT NULL,
+            pin_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS web_admin_sessions (
+            token TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
         """)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(public_tournaments)").fetchall()}
         if "jr_gold_updated_at" not in cols:
@@ -924,16 +967,16 @@ async def api_publish_match_play(request: Request, x_admin_key: str | None = Hea
 def api_clear_current(x_admin_key: str | None = Header(default=None)):
     require_admin(x_admin_key)
     with db() as conn:
-        ids={r["tournament_id"] for r in conn.execute("SELECT DISTINCT tournament_id FROM public_qualifying UNION SELECT DISTINCT tournament_id FROM public_jr_gold UNION SELECT DISTINCT tournament_id FROM public_match_play UNION SELECT DISTINCT tournament_id FROM public_lane_assignments").fetchall()}
-        conn.execute("DELETE FROM public_qualifying")
-        conn.execute("DELETE FROM public_qualifying_settings")
-        conn.execute("DELETE FROM public_jr_gold")
-        conn.execute("DELETE FROM public_jr_gold_groups")
-        conn.execute("DELETE FROM public_match_play")
-        conn.execute("DELETE FROM public_lane_assignments")
-        conn.execute("UPDATE public_tournaments SET qualifying_updated_at=NULL,jr_gold_updated_at=NULL,match_play_updated_at=NULL,lane_assignments_updated_at=NULL")
-        # Keep archived tournament rows/performance history; discard empty live shells.
-        conn.execute("DELETE FROM public_tournaments WHERE archived_at IS NULL AND qualifying_updated_at IS NULL AND jr_gold_updated_at IS NULL AND match_play_updated_at IS NULL AND lane_assignments_updated_at IS NULL")
+        live_ids=[r["tournament_id"] for r in conn.execute("SELECT tournament_id FROM public_tournaments WHERE archived_at IS NULL").fetchall()]
+        ids=set(live_ids)
+        for tid in live_ids:
+            conn.execute("DELETE FROM public_qualifying WHERE tournament_id=?",(tid,))
+            conn.execute("DELETE FROM public_qualifying_settings WHERE tournament_id=?",(tid,))
+            conn.execute("DELETE FROM public_jr_gold WHERE tournament_id=?",(tid,))
+            conn.execute("DELETE FROM public_jr_gold_groups WHERE tournament_id=?",(tid,))
+            conn.execute("DELETE FROM public_match_play WHERE tournament_id=?",(tid,))
+            conn.execute("DELETE FROM public_lane_assignments WHERE tournament_id=?",(tid,))
+        conn.execute("DELETE FROM public_tournaments WHERE archived_at IS NULL")
         conn.commit()
     return {"ok":True,"cleared_tournaments":len(ids)}
 
@@ -1029,13 +1072,40 @@ async def api_publish_jr_gold(request: Request, x_admin_key: str | None = Header
 
 PORTAL_CSS = """
 <style>
-:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#152238;background:#f3f6fa}*{box-sizing:border-box}body{margin:0}a{color:#6b7280}.hero{background:#13233a;color:#fff;padding:34px 18px}.hero .inner,.main{max-width:1080px;margin:auto}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:#c7d2e2}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:#fff;border:1px solid #dbe3ed;border-radius:14px;padding:20px;text-decoration:none;color:#152238}.tile:hover{border-color:#6b7280}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:#66788d}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn{display:inline-block;background:#6b7280;color:#fff;text-decoration:none;padding:11px 14px;border-radius:9px;font-weight:700}.tablewrap{overflow:auto;background:#fff;border-radius:12px;border:1px solid #dbe3ed}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid #e6ebf1;text-align:left;white-space:nowrap}th{background:#f1f3f5}.rank{font-weight:800}.cut-gap td{height:22px;padding:0;background:#f3f6fa;border-top:1px solid #d5dbe3;border-bottom:1px solid #d5dbe3}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:#eef0f2}.search{display:flex;gap:8px;margin:16px 0}.search input{flex:1;padding:11px;border:1px solid #aab6c4;border-radius:8px;font-size:16px}.search button{padding:10px 15px;background:#6b7280;color:#fff;border:0;border-radius:8px;font-weight:700}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}}
+:root{--bg:#f3f6fa;--panel:#fff;--panel2:#f1f3f5;--text:#152238;--muted:#66788d;--border:#dbe3ed;--accent:#6b7280;--hero:#13233a;--heroText:#fff;--cut:#f3f6fa;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+html[data-theme='slate-dark']{--bg:#1e222a;--panel:#292e38;--panel2:#353b46;--text:#f2f4f7;--muted:#b8bec8;--border:#4b5563;--accent:#6ea8fe;--hero:#181c22;--heroText:#f2f4f7;--cut:#1e222a}
+html[data-theme='charcoal-red']{--bg:#181818;--panel:#242424;--panel2:#303030;--text:#f5f5f5;--muted:#c7c7c7;--border:#494949;--accent:#c94c4c;--hero:#121212;--heroText:#fff;--cut:#181818}
+html[data-theme='midnight-blue']{--bg:#111827;--panel:#1f2937;--panel2:#2b3646;--text:#f9fafb;--muted:#cbd5e1;--border:#475569;--accent:#60a5fa;--hero:#0b1220;--heroText:#f9fafb;--cut:#111827}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}a{color:var(--accent)}.hero{background:var(--hero);color:var(--heroText);padding:28px 18px}.hero .inner,.main{max-width:1120px;margin:auto}.hero-row{display:flex;align-items:end;justify-content:space-between;gap:18px;flex-wrap:wrap}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:var(--muted)}.theme-control{display:flex;gap:8px;align-items:center}.theme-control select{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:8px 10px;border-radius:8px}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;text-decoration:none;color:var(--text)}.tile:hover{border-color:var(--accent)}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:var(--muted)}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn,.search button,.danger{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:11px 14px;border:0;border-radius:9px;font-weight:700;cursor:pointer}.danger{background:#b42318}.tablewrap{overflow:auto;background:var(--panel);border-radius:12px;border:1px solid var(--border)}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}th{background:var(--panel2)}.rank{font-weight:800}.cut-gap td{height:22px;padding:0;background:var(--cut);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:var(--panel2)}.search{display:flex;gap:8px;margin:16px 0}.search input,.loginbox input{flex:1;padding:11px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--panel);color:var(--text)}.loginbox{max-width:430px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}.bracket-wrap{overflow-x:auto;padding:10px 2px 20px}.bracket{display:flex;gap:70px;min-width:max-content;align-items:stretch}.round{width:210px;display:flex;flex-direction:column}.round h3{text-align:center;margin:0 0 14px}.round-matches{display:flex;flex:1;flex-direction:column;justify-content:space-around;gap:18px}.match{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:8px;min-height:70px;overflow:visible}.match:after{content:'';position:absolute;right:-36px;top:50%;width:36px;border-top:2px solid var(--accent)}.round:last-child .match:after{display:none}.entrant{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-bottom:1px solid var(--border)}.entrant:last-child{border-bottom:0}.entrant.winner{font-weight:800;background:var(--panel2)}.empty{color:var(--muted)}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}.bracket{gap:48px}}
 </style>
 """
 
+THEME_SCRIPT = """<script>(function(){const key='toughshots_web_theme';const root=document.documentElement;const sel=document.getElementById('themeSelect');const saved=localStorage.getItem(key)||'light';root.dataset.theme=saved;if(sel){sel.value=saved;sel.addEventListener('change',()=>{root.dataset.theme=sel.value;localStorage.setItem(key,sel.value);});}})();</script>"""
+
 
 def _page(title: str, body: str):
-    return HTMLResponse(f"<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title>{PORTAL_CSS}</head><body><div class='hero'><div class='inner'><h1>Tough Shots</h1><p>Youth Bowling Tournament Results</p></div></div><main class='main'>{body}</main></body></html>")
+    selector="<label class='theme-control'>Theme <select id='themeSelect'><option value='light'>Light</option><option value='slate-dark'>Slate Dark</option><option value='charcoal-red'>Charcoal + Red</option><option value='midnight-blue'>Midnight Blue</option></select></label>"
+    return HTMLResponse(f"<!doctype html><html data-theme='light'><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title>{PORTAL_CSS}</head><body><div class='hero'><div class='inner hero-row'><div><h1>Tough Shots</h1><p>Youth Bowling Tournament Results</p></div>{selector}</div></div><main class='main'>{body}</main>{THEME_SCRIPT}</body></html>")
+
+
+def _render_bracket(spec):
+    rounds=(spec or {}).get('rounds') or []
+    if not rounds:
+        return '<p>No bracket has been published yet.</p>'
+    cols=[]
+    for rnd in rounds:
+        cards=[]
+        for m in rnd.get('matches') or []:
+            winner=m.get('winner')
+            rows=[]
+            for key,scorekey in [('p1','score1'),('p2','score2')]:
+                p=m.get(key) or {}; name=proper_name(p.get('name') or 'TBD'); bid=p.get('bowler_id'); score=m.get(scorekey)
+                cls='entrant winner' if winner and bid==winner else 'entrant'
+                sval='—' if score is None else str(score)
+                rows.append(f"<div class='{cls}'><span>{html.escape(name)}</span><strong>{html.escape(sval)}</strong></div>")
+            cards.append("<div class='match'>"+''.join(rows)+"</div>")
+        cols.append(f"<section class='round'><h3>{html.escape(rnd.get('name') or 'Round')}</h3><div class='round-matches'>{''.join(cards)}</div></section>")
+    return "<div class='bracket-wrap'><div class='bracket'>"+''.join(cols)+"</div></div>"
 
 
 def _division_slug(d):
@@ -1052,7 +1122,7 @@ def _division_from_slug(slug):
 def _latest_current_tournament(conn):
     return conn.execute(
         """SELECT * FROM public_tournaments
-           WHERE qualifying_updated_at IS NOT NULL OR jr_gold_updated_at IS NOT NULL OR match_play_updated_at IS NOT NULL OR lane_assignments_updated_at IS NOT NULL
+           WHERE archived_at IS NULL AND (qualifying_updated_at IS NOT NULL OR jr_gold_updated_at IS NOT NULL OR match_play_updated_at IS NOT NULL OR lane_assignments_updated_at IS NOT NULL)
            ORDER BY COALESCE(lane_assignments_updated_at,match_play_updated_at,jr_gold_updated_at,qualifying_updated_at,event_date) DESC LIMIT 1"""
     ).fetchone()
 
@@ -1091,7 +1161,7 @@ def standings_division(division_slug: str):
     if not division:
         raise HTTPException(status_code=404, detail="Division not found")
     with db() as conn:
-        t = conn.execute("SELECT * FROM public_tournaments WHERE qualifying_updated_at IS NOT NULL ORDER BY qualifying_updated_at DESC LIMIT 1").fetchone()
+        t = conn.execute("SELECT * FROM public_tournaments WHERE qualifying_updated_at IS NOT NULL AND archived_at IS NULL ORDER BY qualifying_updated_at DESC LIMIT 1").fetchone()
         rows = [] if not t else conn.execute("SELECT * FROM public_qualifying WHERE tournament_id=? AND division=? ORDER BY rank", (t["tournament_id"], division)).fetchall()
         setting = None if not t else conn.execute("SELECT cut_size FROM public_qualifying_settings WHERE tournament_id=? AND division=?",(t["tournament_id"],division)).fetchone()
     if not t:
@@ -1131,7 +1201,7 @@ def standings_division(division_slug: str):
 def lane_assignments_page(q: str = ""):
     query = " ".join(str(q or "").strip().split())
     with db() as conn:
-        t = conn.execute("SELECT * FROM public_tournaments WHERE lane_assignments_updated_at IS NOT NULL ORDER BY lane_assignments_updated_at DESC LIMIT 1").fetchone()
+        t = conn.execute("SELECT * FROM public_tournaments WHERE lane_assignments_updated_at IS NOT NULL AND archived_at IS NULL ORDER BY lane_assignments_updated_at DESC LIMIT 1").fetchone()
         rows = [] if not t else conn.execute("SELECT * FROM public_lane_assignments WHERE tournament_id=? ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE, lane_no, position_label",(t["tournament_id"],)).fetchall()
     if not t:
         return _page("Lane Assignments", "<p><a href='/current'>← Current Tournament</a></p><h2>Lane Assignments</h2><p>No lane assignments have been published yet.</p>")
@@ -1160,24 +1230,14 @@ def match_play_division(division_slug: str):
     division=_division_from_slug(division_slug)
     if not division: raise HTTPException(status_code=404,detail="Division not found")
     with db() as conn:
-        t=conn.execute("SELECT * FROM public_tournaments WHERE match_play_updated_at IS NOT NULL ORDER BY match_play_updated_at DESC LIMIT 1").fetchone()
+        t=conn.execute("SELECT * FROM public_tournaments WHERE match_play_updated_at IS NOT NULL AND archived_at IS NULL ORDER BY match_play_updated_at DESC LIMIT 1").fetchone()
         row=None if not t else conn.execute("SELECT bracket_json FROM public_match_play WHERE tournament_id=? AND division=?",(t["tournament_id"],division)).fetchone()
     if not t or not row:
         return _page(f"{division} Match Play",f"<p><a href='/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2><p>No bracket has been published yet.</p>")
     import json as _json
-    spec=_json.loads(row["bracket_json"]); rounds=spec.get("rounds") or []
-    parts=[f"<p><a href='/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>"]
-    for rnd in rounds:
-        matches=[]
-        for m in rnd.get("matches") or []:
-            p1=(m.get("p1") or {}).get("name") or "TBD"; p2=(m.get("p2") or {}).get("name") or "TBD"
-            s1="—" if m.get("score1") is None else str(m.get("score1")); s2="—" if m.get("score2") is None else str(m.get("score2"))
-            winner=m.get("winner")
-            p1_class=" class='rank'" if winner and (m.get("p1") or {}).get("bowler_id")==winner else ""
-            p2_class=" class='rank'" if winner and (m.get("p2") or {}).get("bowler_id")==winner else ""
-            matches.append(f"<div class='tile'><div{p1_class}>{html.escape(p1)} <strong>{s1}</strong></div><div{p2_class}>{html.escape(p2)} <strong>{s2}</strong></div></div>")
-        parts.append(f"<h3>{html.escape(rnd.get('name') or 'Round')}</h3><div class='grid'>{''.join(matches) or '<p>No matches.</p>'}</div>")
-    return _page(f"{division} Match Play",''.join(parts))
+    spec=_json.loads(row["bracket_json"])
+    body=f"<p><a href='/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2><p><strong>{html.escape(t['name'])}</strong><br><span class='muted'>{html.escape(t['event_date'])}</span></p>{_render_bracket(spec)}"
+    return _page(f"{division} Match Play",body)
 
 
 @app.get("/bowler-of-the-year", response_class=HTMLResponse)
@@ -1228,7 +1288,7 @@ def _jg_group_for_division(division: str, available_groups):
 @app.get("/jr-gold", response_class=HTMLResponse)
 def jr_gold_index():
     with db() as conn:
-        t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
+        t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL AND archived_at IS NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
         groups=[] if not t else conn.execute("SELECT * FROM public_jr_gold_groups WHERE tournament_id=? ORDER BY group_name",(t["tournament_id"],)).fetchall()
 
     # Match the regular Qualifying and Bowler of the Year pages exactly: seven
@@ -1249,7 +1309,7 @@ def jr_gold_group(division_slug: str):
     if not division:
         raise HTTPException(status_code=404,detail="Jr. Gold division not found")
     with db() as conn:
-        t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
+        t=conn.execute("SELECT * FROM public_tournaments WHERE jr_gold_updated_at IS NOT NULL AND archived_at IS NULL ORDER BY event_date DESC,jr_gold_updated_at DESC LIMIT 1").fetchone()
         if not t:
             return _page(division, f"<p><a href='/jr-gold'>← Jr. Gold Divisions</a></p><h2>{html.escape(division)} — Jr. Gold Qualifying</h2><p>No Jr. Gold standings have been published yet.</p>")
         groups=conn.execute("SELECT * FROM public_jr_gold_groups WHERE tournament_id=?",(t["tournament_id"],)).fetchall()
@@ -1298,21 +1358,153 @@ def archive(q: str = ""):
 @app.get("/archive/tournament/{tournament_id}", response_class=HTMLResponse)
 def archive_tournament_page(tournament_id: str):
     with db() as conn:
-        t = conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL", (tournament_id,)).fetchone()
-        if not t:
-            raise HTTPException(status_code=404, detail="Archived tournament not found")
-        rows = conn.execute("SELECT * FROM tournament_performance WHERE tournament_id=? ORDER BY division,qualifying_rank,last_name,first_name", (tournament_id,)).fetchall()
-    body_parts=[f"<p><a href='/archive'>← Tournament Archive</a></p><h2>{html.escape(t['name'])}</h2><p class='muted'>{html.escape(t['event_date'])} · Final results</p>"]
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    tiles=("<div class='grid'>"
+           f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/qualifying'><h2>Qualifying</h2></a>"
+           f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/jr-gold'><h2>Jr. Gold Qualifying</h2></a>"
+           f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/match-play'><h2>Match Play</h2></a>"
+           f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/lane-assignments'><h2>Lane Assignments</h2></a></div>")
+    return _page(t['name'],f"<p><a href='/archive'>← Tournament Archive</a></p><h2>{html.escape(t['name'])}</h2><p class='muted'>{html.escape(t['event_date'])} · Tournament snapshot</p>{tiles}")
+
+
+@app.get("/archive/tournament/{tournament_id}/qualifying", response_class=HTMLResponse)
+def archive_qualifying_index(tournament_id: str):
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    tiles=''.join(f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/qualifying/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
+    return _page("Archived Qualifying",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}'>← Tournament</a></p><h2>Qualifying</h2><div class='grid'>{tiles}</div>")
+
+
+@app.get("/archive/tournament/{tournament_id}/qualifying/{division_slug}", response_class=HTMLResponse)
+def archive_qualifying_division(tournament_id:str,division_slug:str):
+    division=_division_from_slug(division_slug)
+    if not division: raise HTTPException(status_code=404,detail="Division not found")
     import json as _json
-    for division in DIVISIONS:
-        divrows=[r for r in rows if r['division']==division]
-        if not divrows:
-            continue
-        tr_parts=[]
-        for r in divrows:
-            scores=_json.loads(r['scores_json'])
-            games=" / ".join("—" if x is None else str(x) for x in scores)
-            avg="—" if r['qualifying_average'] is None else f"{r['qualifying_average']:.2f}"
-            tr_parts.append(f"<tr><td>{r['qualifying_rank'] or '—'}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{games}</td><td>{r['qualifying_total']}</td><td>{avg}</td><td>{html.escape(r['finish_label'] or '—')}</td></tr>")
-        body_parts.append(f"<h3>{html.escape(division)}</h3><div class='tablewrap'><table><thead><tr><th>Qual. Rank</th><th>Bowler</th><th>Games 1–6</th><th>Total</th><th>Avg.</th><th>Match Play</th></tr></thead><tbody>{''.join(tr_parts)}</tbody></table></div>")
-    return _page(t['name'], ''.join(body_parts))
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone()
+        rows=conn.execute("SELECT * FROM public_qualifying WHERE tournament_id=? AND division=? ORDER BY rank",(tournament_id,division)).fetchall()
+        setting=conn.execute("SELECT cut_size FROM public_qualifying_settings WHERE tournament_id=? AND division=?",(tournament_id,division)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    cut=int(setting['cut_size'] or 0) if setting else 0; trs=[]; hg=-1; hgn=[]; h3=-1; h3n=[]
+    for r in rows:
+        scores=_json.loads(r['scores_json']); name=f"{proper_name(r['first_name'])} {proper_name(r['last_name'])}"; valid=[int(x) for x in scores if x is not None]
+        games=' / '.join('—' if x is None else str(x) for x in scores); avg='—' if r['average'] is None else f"{r['average']:.2f}"
+        trs.append(f"<tr><td class='rank'>{r['rank']}</td><td>{html.escape(name)}</td><td>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        if cut and int(r['rank'])==cut and int(r['rank'])<len(rows): trs.append("<tr class='cut-gap'><td colspan='5'></td></tr>")
+        if valid:
+            x=max(valid)
+            if x>hg: hg=x; hgn=[name]
+            elif x==hg: hgn.append(name)
+        if len(scores)>=3 and all(x is not None for x in scores[:3]):
+            x=sum(int(v) for v in scores[:3])
+            if x>h3: h3=x; h3n=[name]
+            elif x==h3: h3n.append(name)
+    table="<p>No qualifying snapshot was saved.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>"+''.join(trs)+"</tbody></table></div>"
+    stats=f"<div class='grid'><div class='tile'><h2>High Game</h2><p>{'—' if hg<0 else html.escape(str(hg)+' — '+', '.join(hgn))}</p></div><div class='tile'><h2>High 3-Game Set</h2><p>{'—' if h3<0 else html.escape(str(h3)+' — '+', '.join(h3n))}</p></div></div>"
+    return _page(f"{division} Qualifying",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}/qualifying'>← Divisions</a></p><h2>{html.escape(division)} — Qualifying</h2>{table}{stats}")
+
+
+@app.get("/archive/tournament/{tournament_id}/jr-gold", response_class=HTMLResponse)
+def archive_jg_index(tournament_id:str):
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    tiles=''.join(f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/jr-gold/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
+    return _page("Archived Jr. Gold",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}'>← Tournament</a></p><h2>Jr. Gold Qualifying</h2><div class='grid'>{tiles}</div>")
+
+
+@app.get("/archive/tournament/{tournament_id}/jr-gold/{division_slug}", response_class=HTMLResponse)
+def archive_jg_division(tournament_id:str,division_slug:str):
+    division=_division_from_slug(division_slug)
+    if not division: raise HTTPException(status_code=404,detail="Division not found")
+    import json as _json
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone(); groups=conn.execute("SELECT * FROM public_jr_gold_groups WHERE tournament_id=?",(tournament_id,)).fetchall() if t else []
+        g=_jg_group_for_division(division,groups) if t else None; rows=[] if not g else conn.execute("SELECT * FROM public_jr_gold WHERE tournament_id=? AND group_name=? ORDER BY rank",(tournament_id,g['group_name'])).fetchall()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    if not g: return _page("Jr. Gold",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}/jr-gold'>← Divisions</a></p><p>No Jr. Gold snapshot for this division.</p>")
+    cut=int(g['cut_size'] or 0); trs=[]
+    for r in rows:
+        scores=_json.loads(r['scores_json']); games=' / '.join('—' if x is None else str(x) for x in scores); avg='—' if r['average'] is None else f"{r['average']:.2f}"
+        trs.append(f"<tr><td>{r['rank']}</td><td>{html.escape(proper_name(r['first_name']))} {html.escape(proper_name(r['last_name']))}</td><td>{html.escape(r['jr_gold_state'])}</td><td>{games}</td><td>{r['total']}</td><td>{avg}</td></tr>")
+        if cut and int(r['rank'])==cut and int(r['rank'])<len(rows): trs.append("<tr class='cut-gap'><td colspan='6'></td></tr>")
+    table="<p>No eligible bowlers.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Rank</th><th>Bowler</th><th>JG</th><th>Games 1–6</th><th>Total</th><th>Avg.</th></tr></thead><tbody>"+''.join(trs)+"</tbody></table></div>"
+    return _page("Archived Jr. Gold",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}/jr-gold'>← Divisions</a></p><h2>{html.escape(g['group_name'])} — Jr. Gold Qualifying</h2>{table}")
+
+
+@app.get("/archive/tournament/{tournament_id}/match-play", response_class=HTMLResponse)
+def archive_match_index(tournament_id:str):
+    with db() as conn: t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    tiles=''.join(f"<a class='tile' href='/archive/tournament/{html.escape(tournament_id)}/match-play/{_division_slug(d)}'><h2>{html.escape(d)}</h2></a>" for d in DIVISIONS)
+    return _page("Archived Match Play",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}'>← Tournament</a></p><h2>Match Play</h2><div class='grid'>{tiles}</div>")
+
+
+@app.get("/archive/tournament/{tournament_id}/match-play/{division_slug}", response_class=HTMLResponse)
+def archive_match_division(tournament_id:str,division_slug:str):
+    division=_division_from_slug(division_slug)
+    if not division: raise HTTPException(status_code=404,detail="Division not found")
+    import json as _json
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone(); row=None if not t else conn.execute("SELECT bracket_json FROM public_match_play WHERE tournament_id=? AND division=?",(tournament_id,division)).fetchone()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    spec={} if not row else _json.loads(row['bracket_json'])
+    return _page("Archived Match Play",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}/match-play'>← Divisions</a></p><h2>{html.escape(division)} — Match Play</h2>{_render_bracket(spec)}")
+
+
+@app.get("/archive/tournament/{tournament_id}/lane-assignments", response_class=HTMLResponse)
+def archive_lanes(tournament_id:str,q:str=''):
+    query=' '.join(str(q or '').split())
+    with db() as conn:
+        t=conn.execute("SELECT * FROM public_tournaments WHERE tournament_id=? AND archived_at IS NOT NULL",(tournament_id,)).fetchone(); rows=[] if not t else conn.execute("SELECT * FROM public_lane_assignments WHERE tournament_id=? ORDER BY last_name COLLATE NOCASE,first_name COLLATE NOCASE",(tournament_id,)).fetchall()
+    if not t: raise HTTPException(status_code=404,detail="Archived tournament not found")
+    if query:
+        words=query.casefold().split(); rows=[r for r in rows if all(w in f"{r['first_name']} {r['last_name']} {r['last_name']} {r['first_name']}".casefold() for w in words)]
+    trs=''.join(f"<tr><td>{html.escape(proper_name(r['last_name']))}, {html.escape(proper_name(r['first_name']))}</td><td>{r['lane_no']}</td><td>{html.escape(r['position_label'])}</td><td>{html.escape(r['division'] or '')}</td></tr>" for r in rows)
+    search=f"<form class='search'><input name='q' value='{html.escape(query,quote=True)}' placeholder='Search bowler name'><button>Search</button></form>"
+    table="<p>No lane assignments were saved.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Bowler</th><th>Lane</th><th>Pos.</th><th>Division</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
+    return _page("Archived Lane Assignments",f"<p><a href='/archive/tournament/{html.escape(tournament_id)}'>← Tournament</a></p><h2>Lane Assignments</h2>{search}{table}")
+
+
+def _admin_login_box(message=''):
+    notice=f"<p class='muted'>{html.escape(message)}</p>" if message else ''
+    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><h2>Admin Controls</h2><div class='loginbox'>{notice}<form method='post' action='/admin/login'><label>Admin PIN</label><p><input name='pin' inputmode='numeric' maxlength='6' type='password' required></p><button class='btn' type='submit'>Sign In</button></form></div>")
+
+
+@app.get('/admin',response_class=HTMLResponse)
+def admin_page(request:Request):
+    if not web_admin_from_request(request): return _admin_login_box()
+    with db() as conn: tournaments=conn.execute("SELECT tournament_id,name,event_date FROM public_tournaments WHERE archived_at IS NOT NULL ORDER BY event_date DESC").fetchall()
+    rows=''.join(f"<tr><td>{html.escape(t['event_date'])}</td><td>{html.escape(t['name'])}</td><td><form method='post' action='/admin/archive/{html.escape(t['tournament_id'])}/delete' onsubmit=\"return confirm('Permanently remove this tournament from the archive?')\"><button class='danger' type='submit'>Remove</button></form></td></tr>" for t in tournaments)
+    table="<p>No archived tournaments.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>Date</th><th>Tournament</th><th>Action</th></tr></thead><tbody>"+rows+"</tbody></table></div>"
+    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2><h3>Archived Tournaments</h3>{table}")
+
+
+@app.post('/admin/login')
+async def admin_login(request:Request):
+    check_login_rate(request); raw=(await request.body()).decode('utf-8',errors='replace'); form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}; pin=form.get('pin','').strip()
+    with db() as conn:
+        row=conn.execute("SELECT pin_salt,pin_hash FROM web_admin_pin WHERE id=1").fetchone()
+        if not row or not secrets.compare_digest(pin_digest(pin,row['pin_salt']),row['pin_hash']): record_login_failure(request); return _admin_login_box('Incorrect admin PIN.')
+        token=secrets.token_urlsafe(32); created=datetime.now(timezone.utc); expires=created+timedelta(hours=SESSION_HOURS); conn.execute("INSERT INTO web_admin_sessions(token,created_at,expires_at) VALUES(?,?,?)",(token,created.isoformat(timespec='seconds'),expires.isoformat(timespec='seconds')))
+    response=RedirectResponse('/admin',status_code=303); response.set_cookie('toughshots_admin',token,max_age=SESSION_HOURS*3600,httponly=True,samesite='lax',secure=(request.url.scheme=='https')); return response
+
+
+@app.get('/admin/logout')
+def admin_logout(request:Request):
+    token=request.cookies.get('toughshots_admin')
+    if token:
+        with db() as conn: conn.execute("DELETE FROM web_admin_sessions WHERE token=?",(token,))
+    response=RedirectResponse('/admin',status_code=303); response.delete_cookie('toughshots_admin'); return response
+
+
+@app.post('/admin/archive/{tournament_id}/delete')
+def admin_delete_archive(tournament_id:str,request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    with db() as conn:
+        row=conn.execute("SELECT archived_at FROM public_tournaments WHERE tournament_id=?",(tournament_id,)).fetchone()
+        if row and row['archived_at'] is not None: conn.execute("DELETE FROM public_tournaments WHERE tournament_id=?",(tournament_id,))
+    return RedirectResponse('/admin',status_code=303)
+

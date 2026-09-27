@@ -45,7 +45,32 @@ def _open_db(roster_path):
     return db
 
 
-def _draw_standings_page(c, w, h, *, title, heading, rows, cut=0, games=6):
+def _row_highlights(rows):
+    high_game = -1
+    high_game_names = []
+    high3 = -1
+    high3_names = []
+    for row in rows:
+        name = f"{proper_name(row.get('first_name'))} {proper_name(row.get('last_name'))}".strip()
+        scores = row.get("scores") or []
+        valid = [int(x) for x in scores if x is not None]
+        if valid:
+            hg = max(valid)
+            if hg > high_game:
+                high_game, high_game_names = hg, [name]
+            elif hg == high_game:
+                high_game_names.append(name)
+        if len(scores) >= 3 and all(x is not None for x in scores[:3]):
+            h3 = sum(int(x) for x in scores[:3])
+            if h3 > high3:
+                high3, high3_names = h3, [name]
+            elif h3 == high3:
+                high3_names.append(name)
+    return high_game, high_game_names, high3, high3_names
+
+
+def _draw_standings_page(c, w, h, *, title, heading, rows, cut=0, games=6, show_jg=False, show_highlights=False, highlight_rows=None):
+    """Draw the paper standings using the same columns/order as the public site."""
     from reportlab.lib.units import inch
     margin = 0.35 * inch
     y = h - margin
@@ -59,26 +84,33 @@ def _draw_standings_page(c, w, h, *, title, heading, rows, cut=0, games=6):
     c.drawRightString(w - margin, y, heading)
     y -= 22
 
-    name_w = 2.35 * inch
-    rank_w = 0.42 * inch
-    total_w = 0.68 * inch
-    game_w = (w - 2 * margin - rank_w - name_w - total_w) / max(1, games)
-    xs = [margin, margin + rank_w, margin + rank_w + name_w]
-    for _ in range(games):
-        xs.append(xs[-1] + game_w)
-    xs.append(w - margin)
-    header_h = 0.34 * inch
+    # Website-equivalent columns: Rank | Bowler | [JG] | Games 1-6 | Total | Avg.
+    rank_w = 0.52 * inch
+    name_w = 2.25 * inch
+    jg_w = 0.50 * inch if show_jg else 0
+    total_w = 0.72 * inch
+    avg_w = 0.72 * inch
+    games_w = (w - 2 * margin - rank_w - name_w - jg_w - total_w - avg_w)
+    widths = [rank_w, name_w]
+    if show_jg:
+        widths.append(jg_w)
+    widths += [games_w, total_w, avg_w]
+    xs = [margin]
+    for width in widths:
+        xs.append(xs[-1] + width)
+    headers = ["Rank", "Bowler"] + (["JG"] if show_jg else []) + ["Games 1–6", "Total", "Avg."]
 
-    # A cut is shown as a completely blank table row after the final qualifier,
-    # rather than as a heavy rule. This is easier to spot on paper and mirrors
-    # the public standings page.
     display_rows = []
     for idx, row in enumerate(rows, 1):
         display_rows.append(row)
-        if cut and idx == cut and idx < len(rows):
+        row_rank = int(row.get("rank", idx) or idx)
+        if cut and row_rank == cut:
             display_rows.append(None)
 
-    row_h = min(0.34 * inch, (y - margin - header_h) / max(1, len(display_rows)))
+    header_h = 0.34 * inch
+    stats_h = 0.64 * inch if show_highlights else 0
+    available = y - margin - header_h - stats_h
+    row_h = min(0.34 * inch, available / max(1, len(display_rows)))
     bottom = y - header_h - row_h * len(display_rows)
     c.setLineWidth(1.2)
     c.rect(margin, bottom, w - 2 * margin, y - bottom)
@@ -90,7 +122,6 @@ def _draw_standings_page(c, w, h, *, title, heading, rows, cut=0, games=6):
         yy = y - header_h - r * row_h
         c.line(margin, yy, w - margin, yy)
 
-    headers = ["#", "Bowler"] + [str(i) for i in range(1, games + 1)] + ["Total"]
     c.setFont("Helvetica-Bold", 9)
     for i, label in enumerate(headers):
         c.drawCentredString((xs[i] + xs[i + 1]) / 2, y - header_h / 2 - 3, label)
@@ -100,14 +131,40 @@ def _draw_standings_page(c, w, h, *, title, heading, rows, cut=0, games=6):
         if row is None:
             continue
         ym = y - header_h - (display_idx + 0.5) * row_h
-        c.drawCentredString((xs[0] + xs[1]) / 2, ym - 3, str(row.get("rank", display_idx + 1)))
-        c.drawString(xs[1] + 5, ym - 3, f"{proper_name(row.get('first_name'))} {proper_name(row.get('last_name'))}")
+        values = [str(row.get("rank", display_idx + 1)), f"{proper_name(row.get('first_name'))} {proper_name(row.get('last_name'))}".strip()]
+        if show_jg:
+            values.append(str(row.get("jr_gold_state") or ""))
         scores = row.get("scores") or []
-        for g in range(games):
-            val = "" if g >= len(scores) or scores[g] is None else str(scores[g])
-            c.drawCentredString((xs[2 + g] + xs[3 + g]) / 2, ym - 3, val)
-        total = row.get("total", "") if row.get("complete") else ""
-        c.drawCentredString((xs[-2] + xs[-1]) / 2, ym - 3, str(total))
+        game_text = " / ".join("—" if i >= len(scores) or scores[i] is None else str(scores[i]) for i in range(games))
+        total = str(row.get("total", 0)) if row.get("complete") else str(row.get("total", "") or "")
+        avg = row.get("average")
+        if avg is None and row.get("complete") and games:
+            try:
+                avg = float(row.get("total", 0)) / games
+            except Exception:
+                avg = None
+        avg_text = "—" if avg is None else f"{float(avg):.2f}"
+        values += [game_text, total, avg_text]
+        for col, value in enumerate(values):
+            if col == 1:
+                c.drawString(xs[col] + 5, ym - 3, value)
+            else:
+                c.drawCentredString((xs[col] + xs[col + 1]) / 2, ym - 3, value)
+
+    if show_highlights:
+        hg, hg_names, h3, h3_names = _row_highlights(highlight_rows if highlight_rows is not None else rows)
+        stat_y = bottom - 18
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, stat_y, "High Game")
+        c.setFont("Helvetica", 10)
+        hg_text = "—" if hg < 0 else f"{hg} — {', '.join(hg_names)}"
+        c.drawString(margin + 0.82 * inch, stat_y, hg_text)
+        stat_y -= 18
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, stat_y, "High 3-Game Set")
+        c.setFont("Helvetica", 10)
+        h3_text = "—" if h3 < 0 else f"{h3} — {', '.join(h3_names)}"
+        c.drawString(margin + 1.18 * inch, stat_y, h3_text)
 
 
 def create_qualifying_pdf(roster_path, workspace, print_title=""):
@@ -124,12 +181,19 @@ def create_qualifying_pdf(roster_path, workspace, print_title=""):
         first = True
         for division in db.divisions():
             rows = db.qualifying_rows(division)
-            chunks = [rows[i:i+18] for i in range(0, len(rows), 18)] or [[]]
+            # Keep a whole division together whenever practical so high-game/high-3
+            # summaries match the website page directly.
+            chunks = [rows[i:i+17] for i in range(0, len(rows), 17)] or [[]]
             for page_index, chunk in enumerate(chunks):
-                if not first: c.showPage()
+                if not first:
+                    c.showPage()
                 first = False
-                # rank stays tournament-wide within division even on page 2
-                _draw_standings_page(c, w, h, title=print_title, heading=f"Qualifying - {division}", rows=chunk, cut=(db.cut_size(division) if page_index == 0 else 0), games=db.qualifying_games)
+                _draw_standings_page(
+                    c, w, h, title=print_title, heading=f"Qualifying - {division}",
+                    rows=chunk, cut=db.cut_size(division),
+                    games=db.qualifying_games, show_jg=False,
+                    show_highlights=(page_index == len(chunks) - 1), highlight_rows=rows,
+                )
         c.save()
         return path
     finally:
@@ -158,7 +222,8 @@ def _jr_gold_local_groups(db):
             groups.setdefault(group, []).append(item)
     for rows in groups.values():
         rows.sort(key=lambda r: (-r["total"], tuple(-(x if x is not None else -1) for x in reversed(r["scores"])), r["last_name"].casefold(), r["first_name"].casefold()))
-        for i, r in enumerate(rows, 1): r["rank"] = i
+        for i, r in enumerate(rows, 1):
+            r["rank"] = i
     return settings, groups
 
 
@@ -179,10 +244,11 @@ def create_jr_gold_pdf(roster_path, workspace, print_title=""):
             rows = groups.get(group, [])
             chunks = [rows[i:i+18] for i in range(0, len(rows), 18)] or [[]]
             for page_index, chunk in enumerate(chunks):
-                if not first: c.showPage()
+                if not first:
+                    c.showPage()
                 first = False
-                cut = int(settings.get("cuts", {}).get(group, 0) or 0) if page_index == 0 else 0
-                _draw_standings_page(c, w, h, title=print_title, heading=f"Jr. Gold - {group}", rows=chunk, cut=cut, games=db.qualifying_games)
+                cut = int(settings.get("cuts", {}).get(group, 0) or 0)
+                _draw_standings_page(c, w, h, title=print_title, heading=f"Jr. Gold - {group}", rows=chunk, cut=cut, games=db.qualifying_games, show_jg=True, show_highlights=False)
         c.save()
         return path
     finally:
@@ -232,17 +298,23 @@ def create_current_brackets_pdf(roster_path, workspace, print_title=""):
                 c.setFont("Helvetica-Bold", 15); c.drawString(margin, y, "Tough Shots Tour")
                 c.setFont("Helvetica-Bold", 12); c.drawRightString(w-margin, y, division); y -= 19
                 c.setFont("Helvetica-Bold", 12); c.drawString(margin, y, f"Tournament Round {stage + 1} - {round_name}")
-                c.drawRightString(w-margin, y, f"{min(8, len(chunk)*2)}-Bowler Bracket Sheet")
+                c.drawRightString(w-margin, y, "8-Bowler Bracket Sheet")
                 y -= 16; c.line(margin, y, w-margin, y); y -= 18
-                match_h = (y-margin) / max(1, len(chunk)); box_w = w - 2*margin
-                for m_idx, match in enumerate(chunk):
+                # Every printed bracket sheet is sized for four matches (eight bowlers).
+                # If the round has fewer than four matches, the unused match boxes stay blank.
+                match_h = (y-margin) / 4; box_w = w - 2*margin
+                for m_idx in range(4):
+                    match = chunk[m_idx] if m_idx < len(chunk) else None
                     top = y - m_idx*match_h; bottom = top-match_h+10; mid=(top+bottom)/2
                     c.setLineWidth(1.3); c.rect(margin,bottom,box_w,match_h-10); c.line(margin,mid,w-margin,mid)
                     for slot, yy in ((1,(top+mid)/2),(2,(mid+bottom)/2)):
-                        bid=match.get(f"p{slot}"); seed=seed_by_bowler.get(bid) if bid else None
-                        name=db.display_name(bid) if bid else "BYE / Waiting"; prefix=f"#{seed}  " if seed else ""
+                        bid=match.get(f"p{slot}") if match else None
+                        seed=seed_by_bowler.get(bid) if bid else None
+                        name=" ".join(proper_name(part) for part in db.display_name(bid).split()) if bid else ("BYE / Waiting" if match else "")
+                        prefix=f"#{seed}  " if seed else ""
                         c.setFont("Helvetica-Bold",11); c.drawString(margin+12,yy-4,prefix+name)
-                        c.setFont("Helvetica",9); c.drawRightString(w-margin-72,yy-4,"Score:"); c.rect(w-margin-64,yy-11,50,20)
+                        if match:
+                            c.setFont("Helvetica",9); c.drawRightString(w-margin-72,yy-4,"Score:"); c.rect(w-margin-64,yy-11,50,20)
         c.save()
         return path, stage + 1, [x["division"] for x in selected]
     finally:

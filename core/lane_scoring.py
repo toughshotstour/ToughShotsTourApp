@@ -634,3 +634,15 @@ def create_scoresheet_pdf(manifest, output_path, base_url, print_title=""):
 
     c.save()
     return output_path
+
+
+
+def get_admin_pin_status(base_url, admin_key):
+    base_url=normalize_base_url(base_url)
+    return _json_request(f"{base_url}/api/admin-pin",admin_key=admin_key.strip())
+
+
+def set_admin_pin(base_url, admin_key, pin):
+    base_url=normalize_base_url(base_url)
+    pin=_validate_scorer_pin(pin)
+    return _json_request(f"{base_url}/api/admin-pin",method="POST",payload={"pin":pin},admin_key=admin_key.strip())
