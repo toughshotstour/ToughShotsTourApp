@@ -138,3 +138,8 @@ The public website now has the same four theme choices as the desktop app: Light
 Use **Manage PINs** in the desktop Tournament Manager page to set the separate six-digit Website Admin PIN. The **Admin Controls** button on the desktop Website page opens the protected web admin page, where archived tournaments can be removed. This PIN is separate from the Render admin key.
 
 Archived tournaments retain a snapshot of the published Qualifying, Jr. Gold Qualifying, Match Play, and Lane Assignments data. Clearing Current Tournament does not remove archived snapshots.
+
+
+## Website Admin Master Bowler Database
+
+The PIN/password-protected Admin Controls page now includes a private Master Bowler Database manager. Admins can search, add, edit, or remove permanent cloud bowler records. Bowler IDs are read-only so archived tournament links remain stable; removing a permanent bowler does not erase already archived tournament performance rows.

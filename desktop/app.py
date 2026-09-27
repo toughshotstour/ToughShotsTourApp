@@ -347,10 +347,20 @@ class ToughShotsApp(tk.Tk):
             "Run tournament setup from the imported workspace files, review anything that needs attention, edit the local registration copy if needed, then create lane assignments and score sheets.",
         )
         body = page.body
-        ttk.Button(body, text="Setup Tournament", command=self.run_all, style="Primary.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 14))
+
+        details = ttk.LabelFrame(body, text="Tournament details", padding=12)
+        details.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        for c in range(2):
+            details.columnconfigure(c, weight=1)
+        ttk.Label(details, text="Tournament name", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Entry(details, textvariable=self.event_name_var).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        ttk.Label(details, text="Event date", style="FieldLabel.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 4))
+        ttk.Entry(details, textvariable=self.event_date_var).grid(row=1, column=1, sticky="ew", padx=(8, 0))
+
+        ttk.Button(body, text="Setup Tournament", command=self.run_all, style="Primary.TButton").grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
         review = ttk.LabelFrame(body, text="Review & error-catching files", padding=12)
-        review.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        review.grid(row=2, column=0, sticky="ew", pady=(0, 14))
         review.columnconfigure(0, weight=1)
         buttons = [
             ("Duplicate Payments", lambda: self.open_review_file("duplicate_review.csv")),
@@ -359,8 +369,6 @@ class ToughShotsApp(tk.Tk):
             ("Invalid / Needs Review Bowlers", lambda: self.open_review_file("tournament_divisions/needs_review.csv")),
             ("Missing Demographics", self.show_missing_demographics),
         ]
-        # Two responsive rows: both stay visually centered while buttons expand
-        # and contract with the application window.
         top_review = ttk.Frame(review)
         top_review.grid(row=0, column=0, sticky="ew")
         for c in range(3):
@@ -378,21 +386,20 @@ class ToughShotsApp(tk.Tk):
                 row=0, column=c, sticky="ew", padx=5, pady=5
             )
 
-        ttk.Button(body, text="Edit Local Tournament Registration", command=self.edit_local_registration, style="Primary.TButton").grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        ttk.Button(body, text="Edit Local Tournament Registration", command=self.edit_local_registration, style="Primary.TButton").grid(row=3, column=0, sticky="ew", pady=(0, 14))
 
         lane = ttk.LabelFrame(body, text="Lane assignment & score sheets", padding=12)
-        lane.grid(row=3, column=0, sticky="ew")
-        lane.columnconfigure((0, 1, 2), weight=1)
+        lane.grid(row=4, column=0, sticky="ew")
+        lane.columnconfigure(0, weight=1, uniform="lane_actions")
+        lane.columnconfigure(1, weight=1, uniform="lane_actions")
+        ttk.Label(lane, text="Available lanes", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=(0, 4))
+        ttk.Spinbox(lane, textvariable=self.lane_count_var, from_=1, to=200, width=9).grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=(0, 4))
+        lane.rowconfigure(1, minsize=58)
         lane.rowconfigure(2, minsize=58)
-        ttk.Label(lane, text="Tournament name", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
-        ttk.Entry(lane, textvariable=self.event_name_var).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
-        ttk.Label(lane, text="Event date", style="FieldLabel.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 4))
-        ttk.Entry(lane, textvariable=self.event_date_var).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 10))
-        ttk.Label(lane, text="Available lanes", style="FieldLabel.TLabel").grid(row=0, column=2, sticky="w", padx=(8, 0), pady=(0, 4))
-        ttk.Spinbox(lane, textvariable=self.lane_count_var, from_=1, to=200, width=9).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(0, 10))
-        ttk.Button(lane, text="1. Set Lane Groups\n(Optional)", command=self.manage_lane_groups, style="Secondary.TButton").grid(row=2, column=0, sticky="nsew", padx=(0, 5), pady=5)
-        ttk.Button(lane, text="2. Build / Edit Lane Assignment", command=self.build_or_edit_lane_assignment, style="Primary.TButton").grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-        ttk.Button(lane, text="3. Generate Score Sheets", command=self.generate_lane_scoresheets, style="Primary.TButton").grid(row=2, column=2, sticky="nsew", padx=(5, 0), pady=5)
+        ttk.Button(lane, text="1. Set Lane Groups\n(Optional)", command=self.manage_lane_groups, style="Secondary.TButton").grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=5)
+        ttk.Button(lane, text="2. Build / Edit Lane Assignment", command=self.build_or_edit_lane_assignment, style="Primary.TButton").grid(row=1, column=1, sticky="nsew", padx=(5, 0), pady=5)
+        ttk.Button(lane, text="3. Generate Score Sheets", command=self.generate_lane_scoresheets, style="Primary.TButton").grid(row=2, column=0, sticky="nsew", padx=(0, 5), pady=5)
+        ttk.Button(lane, text="4. Print Score Sheets", command=self.print_lane_scoresheets, style="Secondary.TButton").grid(row=2, column=1, sticky="nsew", padx=(5, 0), pady=5)
         return page
 
     def _build_manager_page(self):
@@ -2049,6 +2056,32 @@ class ToughShotsApp(tk.Tk):
                 note = f"Score sheets were created, but the public lane-assignment page could not be updated.\n\n{publish_exc}"
             messagebox.showinfo("Score Sheets Ready",f"{note}\n\n{pdf}",parent=self)
         except Exception as exc: messagebox.showerror("Score sheets",str(exc),parent=self)
+
+    def print_lane_scoresheets(self):
+        """Print the current lane score-sheet PDF without rebuilding the assignment."""
+        manifest_path = Path(self.lane_manifest_var.get()).expanduser()
+        if not manifest_path.is_file():
+            messagebox.showerror(
+                "No lane assignment",
+                "Build the lane assignment before printing score sheets.",
+                parent=self,
+            )
+            return
+        try:
+            pdf_path = Path(self.lane_pdf_var.get()).expanduser() if self.lane_pdf_var.get().strip() else manifest_path.parent / "lane_scoresheets.pdf"
+            if not pdf_path.is_file():
+                manifest = load_manifest(manifest_path)
+                create_scoresheet_pdf(
+                    manifest,
+                    pdf_path,
+                    self.cloud_url_var.get().strip(),
+                    print_title=self.event_name_var.get().strip(),
+                )
+                self.lane_pdf_var.set(str(pdf_path))
+                self._save_workspace_state()
+            self._finish_print_job("Score Sheet Printing", pdf_path)
+        except Exception as exc:
+            messagebox.showerror("Score Sheet Printing", str(exc), parent=self)
 
     def retry_lane_publish(self):
         manifest_path = Path(self.lane_manifest_var.get()).expanduser()

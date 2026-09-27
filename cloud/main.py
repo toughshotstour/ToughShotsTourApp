@@ -1112,7 +1112,7 @@ PORTAL_CSS = """
 html[data-theme='slate-dark']{--bg:#1e222a;--panel:#292e38;--panel2:#353b46;--text:#f2f4f7;--muted:#b8bec8;--border:#4b5563;--accent:#6ea8fe;--hero:#181c22;--heroText:#f2f4f7;--cut:#1e222a}
 html[data-theme='charcoal-red']{--bg:#181818;--panel:#242424;--panel2:#303030;--text:#f5f5f5;--muted:#c7c7c7;--border:#494949;--accent:#c94c4c;--hero:#121212;--heroText:#fff;--cut:#181818}
 html[data-theme='midnight-blue']{--bg:#111827;--panel:#1f2937;--panel2:#2b3646;--text:#f9fafb;--muted:#cbd5e1;--border:#475569;--accent:#60a5fa;--hero:#0b1220;--heroText:#f9fafb;--cut:#111827}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}a{color:var(--accent)}.hero{background:var(--hero);color:var(--heroText);padding:28px 18px}.hero .inner,.main{max-width:1120px;margin:auto}.hero-row{display:flex;align-items:end;justify-content:space-between;gap:18px;flex-wrap:wrap}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:var(--muted)}.theme-control{display:flex;gap:8px;align-items:center}.theme-control select{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:8px 10px;border-radius:8px}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;text-decoration:none;color:var(--text)}.tile:hover{border-color:var(--accent)}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:var(--muted)}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn,.search button,.danger{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:11px 14px;border:0;border-radius:9px;font-weight:700;cursor:pointer}.danger{background:#b42318}.tablewrap{overflow:auto;background:var(--panel);border-radius:12px;border:1px solid var(--border)}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}th{background:var(--panel2)}.rank{font-weight:800}.cut-gap td{height:22px;padding:0;background:var(--cut);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:var(--panel2)}.search{display:flex;gap:8px;margin:16px 0}.search input,.loginbox input{flex:1;padding:11px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--panel);color:var(--text)}.loginbox{max-width:430px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}.bracket-wrap{overflow-x:auto;padding:10px 2px 20px}.bracket{display:flex;gap:70px;min-width:max-content;align-items:stretch}.round{width:210px;display:flex;flex-direction:column}.round h3{text-align:center;margin:0 0 14px}.round-matches{display:flex;flex:1;flex-direction:column;justify-content:space-around;gap:18px}.match{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:8px;min-height:70px;overflow:visible}.match:after{content:'';position:absolute;right:-36px;top:50%;width:36px;border-top:2px solid var(--accent)}.round:last-child .match:after{display:none}.entrant{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-bottom:1px solid var(--border)}.entrant:last-child{border-bottom:0}.entrant.winner{font-weight:800;background:var(--panel2)}.empty{color:var(--muted)}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}.bracket{gap:48px}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}a{color:var(--accent)}.hero{background:var(--hero);color:var(--heroText);padding:28px 18px}.hero .inner,.main{max-width:1120px;margin:auto}.hero-row{display:flex;align-items:end;justify-content:space-between;gap:18px;flex-wrap:wrap}.hero h1{font-size:34px;margin:0 0 6px}.hero p{margin:0;color:var(--muted)}.theme-control{display:flex;gap:8px;align-items:center}.theme-control select{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:8px 10px;border-radius:8px}.main{padding:24px 16px 50px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.tile{display:block;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;text-decoration:none;color:var(--text)}.tile:hover{border-color:var(--accent)}.tile h2{margin:0 0 7px;font-size:19px}.muted{color:var(--muted)}.buttons{display:flex;gap:10px;flex-wrap:wrap}.btn,.search button,.danger{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:11px 14px;border:0;border-radius:9px;font-weight:700;cursor:pointer}.danger{background:#b42318}.tablewrap{overflow:auto;background:var(--panel);border-radius:12px;border:1px solid var(--border)}table{border-collapse:collapse;width:100%}th,td{padding:10px 11px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}th{background:var(--panel2)}.rank{font-weight:800}.cut-gap td{height:22px;padding:0;background:var(--cut);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.games{font-variant-numeric:tabular-nums}.status{font-size:12px;font-weight:800;padding:3px 7px;border-radius:20px;background:var(--panel2)}.search{display:flex;gap:8px;margin:16px 0}.search input,.loginbox input,.admin-form input,.admin-form select{flex:1;padding:11px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--panel);color:var(--text)}.loginbox{max-width:430px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}.admin-form{max-width:720px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px}.admin-form .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.admin-form label{display:block;font-weight:700;margin-bottom:5px}.admin-form .full{grid-column:1/-1}.admin-form .readonly{opacity:.8}.admin-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}@media(max-width:650px){.admin-form .form-grid{grid-template-columns:1fr}}.bracket-wrap{overflow-x:auto;padding:10px 2px 20px}.bracket{display:flex;gap:70px;min-width:max-content;align-items:stretch}.round{width:210px;display:flex;flex-direction:column}.round h3{text-align:center;margin:0 0 14px}.round-matches{display:flex;flex:1;flex-direction:column;justify-content:space-around;gap:18px}.match{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:8px;min-height:70px;overflow:visible}.match:after{content:'';position:absolute;right:-36px;top:50%;width:36px;border-top:2px solid var(--accent)}.round:last-child .match:after{display:none}.entrant{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-bottom:1px solid var(--border)}.entrant:last-child{border-bottom:0}.entrant.winner{font-weight:800;background:var(--panel2)}.empty{color:var(--muted)}@media(max-width:600px){.hero h1{font-size:27px}th,td{padding:8px}.bracket{gap:48px}}
 </style>
 """
 
@@ -1616,7 +1616,126 @@ def admin_page(request:Request):
     table="<p>No archived tournaments.</p>" if not rows else "<div class='tablewrap'><table><thead><tr><th>Date</th><th>Tournament</th><th>Action</th></tr></thead><tbody>"+rows+"</tbody></table></div>"
     default_season = str(datetime.now(timezone.utc).year)
     boy_reset = f'''<h3>Bowler of the Year</h3><p class='muted'>Archive the final standings at year-end, or start a fresh BOY period without deleting tournament history.</p><form method='post' action='/admin/boy/archive' onsubmit="return confirm('Archive the current Bowler of the Year standings?');"><label>Season name</label><p><input name='season_name' value='{default_season}' required></p><button class='btn' type='submit'>Archive Current BOY Season</button></form><br><form method='post' action='/admin/boy/clear' onsubmit="return confirm('Clear the current Bowler of the Year standings? Archived tournaments and archived BOY seasons will be kept.');"><button class='danger' type='submit'>Clear Bowler of the Year Standings</button></form>'''
-    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2>{boy_reset}<h3>Archived Tournaments</h3>{table}")
+    return _page("Admin Controls",f"<p><a href='/'>← Home</a></p><div class='buttons'><a class='btn' href='/admin/bowlers'>Master Bowler Database</a><a class='btn' href='/admin/logout'>Sign Out</a></div><h2>Admin Controls</h2>{boy_reset}<h3>Archived Tournaments</h3>{table}")
+
+
+
+def _admin_bowler_form_values(form):
+    first=proper_name(' '.join(str(form.get('first_name','')).split()))
+    last=proper_name(' '.join(str(form.get('last_name','')).split()))
+    if not first or not last:
+        raise ValueError('First and last name are required.')
+    raw_usbc=''.join(str(form.get('usbc_id_raw','')).split())
+    import re
+    if not re.sub(r'\D','',raw_usbc):
+        raise ValueError('USBC ID must contain at least one digit.')
+    birthdate=_normalize_birthdate(str(form.get('birthdate','')))
+    gender=_normalize_gender(str(form.get('gender','')))
+    if gender not in {'Boy','Girl'}:
+        raise ValueError('Gender must be Boy or Girl.')
+    division=' '.join(str(form.get('division','')).split())
+    if division not in DIVISIONS:
+        division=_division_for(birthdate,gender)
+    if not division:
+        raise ValueError('A valid division is required.')
+    state=str(form.get('jr_gold_state','')).strip().upper()
+    if state not in {'','JG','Q'}:
+        raise ValueError('Jr. Gold status must be blank, JG, or Q.')
+    return first,last,gender,birthdate,division,raw_usbc,state
+
+
+def _admin_bowler_form(row=None,message='',error=''):
+    row=dict(row or {})
+    bid=str(row.get('bowler_id',''))
+    first=html.escape(str(row.get('first_name','')),quote=True)
+    last=html.escape(str(row.get('last_name','')),quote=True)
+    gender=str(row.get('gender',''))
+    birth=html.escape(str(row.get('birthdate','')),quote=True)
+    division=str(row.get('division',''))
+    usbc=html.escape(str(row.get('usbc_id_raw','')),quote=True)
+    state=str(row.get('jr_gold_state',''))
+    heading='Edit Bowler' if bid else 'Add Bowler'
+    action=f"/admin/bowlers/{html.escape(bid,quote=True)}/edit" if bid else '/admin/bowlers/new'
+    notice=''
+    if message: notice += f"<p class='muted'>{html.escape(message)}</p>"
+    if error: notice += f"<p style='color:#d92d20;font-weight:700'>{html.escape(error)}</p>"
+    id_block=(f"<div class='full'><label>Bowler ID</label><input class='readonly' value='{html.escape(bid,quote=True)}' readonly><p class='muted'>Bowler ID is permanent so archived results stay linked correctly.</p></div>" if bid else "<div class='full'><p class='muted'>Bowler ID will be generated from the USBC ID when this record is added.</p></div>")
+    divopts=''.join(f"<option value='{html.escape(d,quote=True)}'{' selected' if d==division else ''}>{html.escape(d)}</option>" for d in DIVISIONS)
+    gopts=''.join(f"<option value='{g}'{' selected' if g==gender else ''}>{g}</option>" for g in ('Boy','Girl'))
+    sopts=''.join(f"<option value='{st}'{' selected' if st==state else ''}>{'Blank' if st=='' else st}</option>" for st in ('','JG','Q'))
+    return _page(heading,f"<p><a href='/admin/bowlers'>← Master Bowler Database</a></p><h2>{heading}</h2>{notice}<form class='admin-form' method='post' action='{action}' onsubmit=\"return confirm('{ 'Save these changes to the permanent master database?' if bid else 'Add this bowler to the permanent master database?' }');\"><div class='form-grid'>{id_block}<div><label>First Name</label><input name='first_name' value='{first}' required></div><div><label>Last Name</label><input name='last_name' value='{last}' required></div><div><label>Gender</label><select name='gender' required>{gopts}</select></div><div><label>Birthdate</label><input name='birthdate' type='date' value='{birth}' required></div><div><label>Division</label><select name='division' required>{divopts}</select></div><div><label>USBC ID</label><input name='usbc_id_raw' value='{usbc}' required></div><div><label>Jr. Gold Status</label><select name='jr_gold_state'>{sopts}</select></div></div><div class='admin-actions'><button class='btn' type='submit'>{'Save Changes' if bid else 'Add Bowler'}</button><a class='btn' href='/admin/bowlers'>Cancel</a></div></form>")
+
+
+@app.get('/admin/bowlers',response_class=HTMLResponse)
+def admin_bowler_database(request:Request,q:str=''):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    query=' '.join(str(q or '').split())
+    with db() as conn:
+        if query:
+            like=f"%{query}%"
+            rows=conn.execute("SELECT * FROM permanent_bowlers WHERE first_name LIKE ? COLLATE NOCASE OR last_name LIKE ? COLLATE NOCASE OR (first_name||' '||last_name) LIKE ? COLLATE NOCASE OR bowler_id LIKE ? OR usbc_id_raw LIKE ? ORDER BY last_name COLLATE NOCASE,first_name COLLATE NOCASE",(like,like,like,like,like)).fetchall()
+        else:
+            rows=conn.execute("SELECT * FROM permanent_bowlers ORDER BY last_name COLLATE NOCASE,first_name COLLATE NOCASE").fetchall()
+    trs=''.join(f"<tr><td>{html.escape(proper_name(r['last_name']))}, {html.escape(proper_name(r['first_name']))}</td><td>{html.escape(r['bowler_id'])}</td><td>{html.escape(r['division'])}</td><td>{html.escape(r['jr_gold_state'] or '')}</td><td><a class='btn' href='/admin/bowlers/{html.escape(r['bowler_id'])}/edit'>Edit</a></td><td><form method='post' action='/admin/bowlers/{html.escape(r['bowler_id'])}/delete' onsubmit=\"return confirm('Remove this bowler from the permanent master database? Archived tournament results will remain.');\"><button class='danger' type='submit'>Remove</button></form></td></tr>" for r in rows)
+    table="<p>No bowlers found.</p>" if not trs else "<div class='tablewrap'><table><thead><tr><th>Bowler</th><th>Bowler ID</th><th>Division</th><th>JG/Q</th><th>Edit</th><th>Remove</th></tr></thead><tbody>"+trs+"</tbody></table></div>"
+    search=f"<form class='search' method='get'><input name='q' value='{html.escape(query,quote=True)}' placeholder='Search name, Bowler ID, or USBC ID'><button type='submit'>Search</button></form>"
+    return _page('Master Bowler Database',f"<p><a href='/admin'>← Admin Controls</a></p><div class='buttons'><a class='btn' href='/admin/bowlers/new'>Add Bowler</a></div><h2>Master Bowler Database</h2><p class='muted'>{len(rows)} bowler(s) shown. This page is private and requires the website admin password.</p>{search}{table}")
+
+
+@app.get('/admin/bowlers/new',response_class=HTMLResponse)
+def admin_new_bowler_page(request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    return _admin_bowler_form({'gender':'Boy','division':'U12 Mixed','jr_gold_state':''})
+
+
+@app.post('/admin/bowlers/new')
+async def admin_new_bowler(request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    raw=(await request.body()).decode('utf-8',errors='replace'); form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}
+    try:
+        first,last,gender,birthdate,division,raw_usbc,state=_admin_bowler_form_values(form)
+        with db() as conn:
+            duplicate=conn.execute("SELECT bowler_id FROM permanent_bowlers WHERE first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE AND birthdate=?",(first,last,birthdate)).fetchone()
+            if duplicate: raise ValueError(f"A matching bowler already exists with Bowler ID {duplicate['bowler_id']}.")
+            bowler_id=_allocate_bowler_id(conn,raw_usbc)
+            now=now_iso()
+            conn.execute("INSERT INTO permanent_bowlers(bowler_id,usbc_id_raw,first_name,last_name,gender,birthdate,division,jr_gold_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(bowler_id,raw_usbc,first,last,gender,birthdate,division,state,now,now))
+        return RedirectResponse(f'/admin/bowlers/{bowler_id}/edit',status_code=303)
+    except Exception as exc:
+        return _admin_bowler_form(form,error=str(getattr(exc,'detail',exc)))
+
+
+@app.get('/admin/bowlers/{bowler_id}/edit',response_class=HTMLResponse)
+def admin_edit_bowler_page(bowler_id:str,request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    with db() as conn: row=conn.execute("SELECT * FROM permanent_bowlers WHERE bowler_id=?",(bowler_id,)).fetchone()
+    if not row: raise HTTPException(status_code=404,detail='Bowler not found')
+    return _admin_bowler_form(row)
+
+
+@app.post('/admin/bowlers/{bowler_id}/edit')
+async def admin_edit_bowler(bowler_id:str,request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    raw=(await request.body()).decode('utf-8',errors='replace'); form={k:v[-1] for k,v in parse_qs(raw,keep_blank_values=True).items()}
+    try:
+        first,last,gender,birthdate,division,raw_usbc,state=_admin_bowler_form_values(form)
+        with db() as conn:
+            row=conn.execute("SELECT * FROM permanent_bowlers WHERE bowler_id=?",(bowler_id,)).fetchone()
+            if not row: raise ValueError('Bowler not found.')
+            duplicate=conn.execute("SELECT bowler_id FROM permanent_bowlers WHERE bowler_id<>? AND first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE AND birthdate=?",(bowler_id,first,last,birthdate)).fetchone()
+            if duplicate: raise ValueError(f"Those identity fields match another bowler ({duplicate['bowler_id']}).")
+            conn.execute("UPDATE permanent_bowlers SET usbc_id_raw=?,first_name=?,last_name=?,gender=?,birthdate=?,division=?,jr_gold_state=?,updated_at=? WHERE bowler_id=?",(raw_usbc,first,last,gender,birthdate,division,state,now_iso(),bowler_id))
+        return RedirectResponse(f'/admin/bowlers/{bowler_id}/edit',status_code=303)
+    except Exception as exc:
+        form=dict(form); form['bowler_id']=bowler_id
+        return _admin_bowler_form(form,error=str(getattr(exc,'detail',exc)))
+
+
+@app.post('/admin/bowlers/{bowler_id}/delete')
+def admin_delete_bowler(bowler_id:str,request:Request):
+    if not web_admin_from_request(request): return RedirectResponse('/admin',status_code=303)
+    with db() as conn: conn.execute("DELETE FROM permanent_bowlers WHERE bowler_id=?",(bowler_id,))
+    return RedirectResponse('/admin/bowlers',status_code=303)
 
 
 @app.post('/admin/login')

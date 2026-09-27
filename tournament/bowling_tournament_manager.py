@@ -56,6 +56,13 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+# When this file is launched directly, Python places only the tournament/
+# directory on sys.path. Add the project root so shared packages such as
+# core remain importable both directly and through the desktop application.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from core.theme import load_theme_name, apply_theme
 
 
